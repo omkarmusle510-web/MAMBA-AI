@@ -30,7 +30,7 @@ _TERMINAL_STATES = frozenset({ExecutionState.COMPLETED, ExecutionState.FAILED})
 _ALLOWED_TRANSITIONS: dict[ExecutionState, frozenset[ExecutionState]] = {
     ExecutionState.PENDING: frozenset({ExecutionState.PLANNING, ExecutionState.FAILED}),
     ExecutionState.PLANNING: frozenset({ExecutionState.EXECUTING, ExecutionState.FAILED}),
-    ExecutionState.EXECUTING: frozenset({ExecutionState.COMPLETED, ExecutionState.FAILED}),
+    ExecutionState.EXECUTING: frozenset({ExecutionState.PLANNING, ExecutionState.COMPLETED, ExecutionState.FAILED}),
     ExecutionState.COMPLETED: frozenset(),
     ExecutionState.FAILED: frozenset(),
 }
@@ -68,8 +68,6 @@ class ExecutionRecord:
             self.completed_at = now
 
     def attach_plan(self, plan: ExecutionPlan) -> None:
-        if self.plan is not None:
-            raise ValidationError("execution already has a plan")
         self.plan = plan
         self.updated_at = _utc_now()
 

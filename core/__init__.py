@@ -1,5 +1,6 @@
 """Mamba Core layer foundation."""
 
+from .brain import Brain, create_brain
 from .context import ExecutionContext
 from .errors import (
     CoreError,
@@ -22,6 +23,7 @@ from .types import (
 )
 
 __all__ = [
+    "Brain",
     "CoreError",
     "ExecutionContext",
     "ExecutionError",
@@ -40,4 +42,5 @@ __all__ = [
     "StateTransitionError",
     "UserRequest",
     "ValidationError",
+    "create_brain",
 ]
