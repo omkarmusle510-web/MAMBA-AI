@@ -10,7 +10,13 @@ from core.context import ExecutionContext
 from tasks.executor import TaskExecutor
 from tasks.types import TaskInput, TaskOutput
 from tools.errors import ToolError
-from tools.filesystem.tool import ListDirectoryTool, ReadFileTool, WriteFileTool
+from tools.filesystem.tool import (
+    CreateDirectoryTool,
+    DeleteTool,
+    ListDirectoryTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from tools.filesystem.types import FILESYSTEM_OPERATIONS, FilesystemAction
 from tools.protocols import ToolExecutor
 from tools.tool import BaseTool, StandardToolExecutor
@@ -22,6 +28,12 @@ from .types import SkillInput, SkillOutput
 _LIST_DIR_SUPPORTED_INTENTS = frozenset({"list_directory", "list_dir"})
 _READ_FILE_SUPPORTED_INTENTS = frozenset({"read_file"})
 _WRITE_FILE_SUPPORTED_INTENTS = frozenset({"write_file"})
+_CREATE_DIR_SUPPORTED_INTENTS = frozenset(
+    {"create_directory", "create_dir", "mkdir", "make_directory"}
+)
+_DELETE_SUPPORTED_INTENTS = frozenset(
+    {"delete", "delete_file", "delete_directory", "remove", "remove_file", "rmdir", "unlink"}
+)
 
 
 class ListDirectorySkill(BaseSkill):
@@ -109,7 +121,7 @@ class ListDirectorySkill(BaseSkill):
         )
 
     def _resolve_path_arg(self, metadata: dict[str, Any]) -> str:
-        val = metadata.get("path") or metadata.get("directory")
+        val = metadata.get("path") or metadata.get("directory") or metadata.get("dir")
         if isinstance(val, str) and val.strip():
             return val.strip()
         return "."
@@ -326,6 +338,234 @@ class WriteFileSkill(BaseSkill):
         return None
 
 
+class CreateDirectorySkill(BaseSkill):
+    """Skill for creating directories using CreateDirectoryTool."""
+
+    def __init__(
+        self,
+        tool: BaseTool | None = None,
+        *,
+        root_dir: str | Path | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = FILESYSTEM_OPERATIONS[FilesystemAction.CREATE_DIRECTORY]
+        skill = Skill(
+            name=defn.name,
+            description=defn.description,
+            metadata=defn.to_metadata(),
+        )
+        super().__init__(skill)
+        self._tool = tool or CreateDirectoryTool(root_dir=root_dir)
+        self._executor = executor or StandardToolExecutor()
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        """Execute the create_directory capability."""
+        intent = (
+            input.task_input.step_metadata.get("action")
+            or input.task_input.intent
+            or ""
+        ).strip().lower()
+
+        if intent not in _CREATE_DIR_SUPPORTED_INTENTS:
+            return SkillOutput(
+                content=f"unsupported capability intent: '{input.task_input.intent}'",
+                success=False,
+                metadata={"error": "unsupported_capability"},
+            )
+
+        path = self._resolve_path_arg(input.task_input.step_metadata)
+        if not path:
+            return SkillOutput(
+                content="Missing required argument: 'path'",
+                success=False,
+                metadata={"error": "missing_path"},
+            )
+
+        tool_input = ToolInput(
+            arguments={"path": path},
+            metadata=dict(input.task_input.step_metadata),
+        )
+
+        try:
+            tool_output = self._executor.execute(self._tool, tool_input)
+        except ToolError as exc:
+            return SkillOutput(
+                content=str(exc),
+                success=False,
+                metadata={"error": type(exc).__name__},
+            )
+        except Exception as exc:
+            return SkillOutput(
+                content=f"filesystem tool execution failed: {exc}",
+                success=False,
+                metadata={"error": type(exc).__name__},
+            )
+
+        if not tool_output.success:
+            return SkillOutput(
+                content=tool_output.error or "create_directory failed",
+                success=False,
+                metadata=dict(tool_output.metadata),
+            )
+
+        result = tool_output.result or {}
+        resolved_path = result.get("path", path)
+
+        return SkillOutput(
+            content=f"Successfully created directory '{resolved_path}'",
+            success=True,
+            metadata={
+                **dict(tool_output.metadata),
+                "path": resolved_path,
+                "created": result.get("created", True),
+            },
+        )
+
+    def _resolve_path_arg(self, metadata: dict[str, Any]) -> str | None:
+        val = (
+            metadata.get("path")
+            or metadata.get("directory")
+            or metadata.get("directory_name")
+            or metadata.get("dir")
+            or metadata.get("folder")
+            or metadata.get("name")
+        )
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+        for sub_key in ("arguments", "args", "parameters", "params", "input"):
+            sub = metadata.get(sub_key)
+            if isinstance(sub, dict):
+                sub_val = (
+                    sub.get("path")
+                    or sub.get("directory")
+                    or sub.get("directory_name")
+                    or sub.get("dir")
+                    or sub.get("folder")
+                    or sub.get("name")
+                )
+                if isinstance(sub_val, str) and sub_val.strip():
+                    return sub_val.strip()
+
+        return None
+
+
+class DeleteSkill(BaseSkill):
+    """Skill for deleting files or empty directories using DeleteTool."""
+
+    def __init__(
+        self,
+        tool: BaseTool | None = None,
+        *,
+        root_dir: str | Path | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = FILESYSTEM_OPERATIONS[FilesystemAction.DELETE]
+        skill = Skill(
+            name=defn.name,
+            description=defn.description,
+            metadata=defn.to_metadata(),
+        )
+        super().__init__(skill)
+        self._tool = tool or DeleteTool(root_dir=root_dir)
+        self._executor = executor or StandardToolExecutor()
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        """Execute the delete capability."""
+        intent = (
+            input.task_input.step_metadata.get("action")
+            or input.task_input.intent
+            or ""
+        ).strip().lower()
+
+        if intent not in _DELETE_SUPPORTED_INTENTS:
+            return SkillOutput(
+                content=f"unsupported capability intent: '{input.task_input.intent}'",
+                success=False,
+                metadata={"error": "unsupported_capability"},
+            )
+
+        path = self._resolve_path_arg(input.task_input.step_metadata)
+        if not path:
+            return SkillOutput(
+                content="Missing required argument: 'path'",
+                success=False,
+                metadata={"error": "missing_path"},
+            )
+
+        tool_input = ToolInput(
+            arguments={"path": path},
+            metadata=dict(input.task_input.step_metadata),
+        )
+
+        try:
+            tool_output = self._executor.execute(self._tool, tool_input)
+        except ToolError as exc:
+            return SkillOutput(
+                content=str(exc),
+                success=False,
+                metadata={"error": type(exc).__name__},
+            )
+        except Exception as exc:
+            return SkillOutput(
+                content=f"filesystem tool execution failed: {exc}",
+                success=False,
+                metadata={"error": type(exc).__name__},
+            )
+
+        if not tool_output.success:
+            return SkillOutput(
+                content=tool_output.error or "delete failed",
+                success=False,
+                metadata=dict(tool_output.metadata),
+            )
+
+        result = tool_output.result or {}
+        resolved_path = result.get("path", path)
+
+        return SkillOutput(
+            content=f"Successfully deleted '{resolved_path}'",
+            success=True,
+            metadata={
+                **dict(tool_output.metadata),
+                "path": resolved_path,
+                "deleted": result.get("deleted", True),
+            },
+        )
+
+    def _resolve_path_arg(self, metadata: dict[str, Any]) -> str | None:
+        val = (
+            metadata.get("path")
+            or metadata.get("file")
+            or metadata.get("filename")
+            or metadata.get("directory")
+            or metadata.get("directory_name")
+            or metadata.get("dir")
+            or metadata.get("folder")
+            or metadata.get("name")
+        )
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+        for sub_key in ("arguments", "args", "parameters", "params", "input"):
+            sub = metadata.get(sub_key)
+            if isinstance(sub, dict):
+                sub_val = (
+                    sub.get("path")
+                    or sub.get("file")
+                    or sub.get("filename")
+                    or sub.get("directory")
+                    or sub.get("directory_name")
+                    or sub.get("dir")
+                    or sub.get("folder")
+                    or sub.get("name")
+                )
+                if isinstance(sub_val, str) and sub_val.strip():
+                    return sub_val.strip()
+
+        return None
+
+
 FilesystemSkill = ListDirectorySkill
 
 
@@ -336,6 +576,8 @@ class FilesystemTaskHandler:
     list_directory_skill: ListDirectorySkill
     read_file_skill: ReadFileSkill
     write_file_skill: WriteFileSkill
+    create_directory_skill: CreateDirectorySkill
+    delete_skill: DeleteSkill
 
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         intent = (
@@ -353,6 +595,12 @@ class FilesystemTaskHandler:
         elif intent in _WRITE_FILE_SUPPORTED_INTENTS:
             skill_input = SkillInput.from_task(task_input, context)
             return self.write_file_skill.run(skill_input).to_task_output()
+        elif intent in _CREATE_DIR_SUPPORTED_INTENTS:
+            skill_input = SkillInput.from_task(task_input, context)
+            return self.create_directory_skill.run(skill_input).to_task_output()
+        elif intent in _DELETE_SUPPORTED_INTENTS:
+            skill_input = SkillInput.from_task(task_input, context)
+            return self.delete_skill.run(skill_input).to_task_output()
         else:
             return TaskOutput(
                 content=f"unsupported capability intent: '{task_input.intent}'",
@@ -368,6 +616,12 @@ def create_filesystem_task_executor(
     executor: ToolExecutor | None = None,
 ) -> TaskExecutor:
     """Create a TaskExecutor wired to filesystem capabilities."""
+    if isinstance(tool, CreateDirectoryTool):
+        skill = CreateDirectorySkill(tool=tool, root_dir=root_dir, executor=executor)
+        return TaskExecutor(handler=SkillTaskHandler(handler=skill))
+    if isinstance(tool, DeleteTool):
+        skill = DeleteSkill(tool=tool, root_dir=root_dir, executor=executor)
+        return TaskExecutor(handler=SkillTaskHandler(handler=skill))
     if isinstance(tool, WriteFileTool):
         skill = WriteFileSkill(tool=tool, root_dir=root_dir, executor=executor)
         return TaskExecutor(handler=SkillTaskHandler(handler=skill))
@@ -382,5 +636,7 @@ def create_filesystem_task_executor(
         list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=executor),
         read_file_skill=ReadFileSkill(root_dir=root_dir, executor=executor),
         write_file_skill=WriteFileSkill(root_dir=root_dir, executor=executor),
+        create_directory_skill=CreateDirectorySkill(root_dir=root_dir, executor=executor),
+        delete_skill=DeleteSkill(root_dir=root_dir, executor=executor),
     )
     return TaskExecutor(handler=handler)
