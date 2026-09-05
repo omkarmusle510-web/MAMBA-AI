@@ -29,12 +29,32 @@ from .types import (
 
 _DEFAULT_MAX_CYCLES = 10
 
+_NEEDS_REPLANNING_KEY = "needs_replanning"
+"""ExecutionPlan.metadata key a planner sets to request another reasoning
+cycle after this plan's steps run, because it already expects to need
+information those steps will produce. Absent/false means the plan is
+expected to satisfy the goal on its own - no extra step or model call is
+required for the normal case.
+"""
+
 
 def _last_observation_content(context: ExecutionContext) -> str | None:
     observations = context.observations
     if not observations:
         return None
     return observations[-1].content
+
+
+def _plan_needs_replanning(plan: ExecutionPlan) -> bool:
+    return plan.metadata.get(_NEEDS_REPLANNING_KEY) is True
+
+
+def _plan_signature(plan: ExecutionPlan) -> tuple[tuple[str, str], ...]:
+    """A cheap fingerprint used to detect a planner repeating itself."""
+    return tuple(
+        (step.intent.strip().lower(), step.description.strip())
+        for step in plan.steps
+    )
 
 
 @dataclass(slots=True)
@@ -136,9 +156,18 @@ class Brain:
              c. Capture observation
              d. Evaluate observation → continue / re-plan / finish
              e. Verify when applicable
-          3. If re-plan is needed, start a new cycle with updated context
+          3. A plan completes normally once its steps finish - no extra
+             step or model call is needed for that common case. Re-planning
+             instead happens when the context/observations actually call
+             for more reasoning: a step's observation can request it
+             directly (e.g. a flagged verification failure), or the planner
+             can mark the plan itself (`needs_replanning`) when it already
+             expects its steps to surface information it will need before
+             the goal is done. Either way, the next cycle sees the
+             observations already gathered.
         """
         cycles_used = 0
+        previous_signature: tuple[tuple[str, str], ...] | None = None
 
         while cycles_used < self.max_cycles:
             cycles_used += 1
@@ -148,6 +177,17 @@ class Brain:
             if plan is None:
                 return context.record.to_result()
 
+            # ── Loop-prevention: a planner repeating an identical plan is
+            # making no progress; stop instead of burning further cycles. ──
+            signature = _plan_signature(plan)
+            if signature == previous_signature:
+                context.mark_failed(
+                    "replanning produced an identical plan with no new "
+                    "information; stopping to avoid a pointless loop"
+                )
+                return context.record.to_result()
+            previous_signature = signature
+
             # ── Execute plan steps ──
             outcome = self._execute_plan(context, plan)
 
@@ -156,8 +196,9 @@ class Brain:
                 return context.record.to_result()
 
             if outcome == _StepOutcome.REPLAN:
-                # Observation indicated current approach is insufficient.
-                # Loop back to reason/plan with updated context.
+                # An observation asked for re-planning, or the planner
+                # flagged this plan as needing a follow-up cycle. Loop back
+                # to reason/plan with the updated context.
                 continue
 
             if outcome == _StepOutcome.FINISHED:
@@ -207,12 +248,24 @@ class Brain:
     ) -> _StepOutcome:
         """Execute steps from a plan, evaluating each observation.
 
+        A step's own observation can request replanning mid-plan (e.g. a
+        failed verification flagged for retry). Once every step in the plan
+        has executed successfully, the plan completes (FINISHED) unless the
+        planner itself flagged, via `plan.metadata["needs_replanning"]`,
+        that it already expects those steps to surface information it
+        needs before it can continue - in which case control returns to
+        the caller as REPLAN so a new cycle can reason over the results
+        just observed.
+
         Returns the overall outcome: FINISHED, REPLAN, or FAILED.
         """
         for step in plan.steps:
             outcome = self._execute_step(context, step)
             if outcome != _StepOutcome.FINISHED:
                 return outcome
+
+        if _plan_needs_replanning(plan):
+            return _StepOutcome.REPLAN
 
         return _StepOutcome.FINISHED
 

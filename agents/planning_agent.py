@@ -29,7 +29,8 @@ execute — you are not executing them yourself.
 Rules:
 - Return ONLY a single JSON object, no markdown, no commentary.
 - The JSON must have this exact structure:
-  {"steps": [{"description": "...", "intent": "...", "metadata": {}}]}
+  {"steps": [{"description": "...", "intent": "...", "metadata": {}}], \
+"needs_replanning": false}
 - "description": a clear, concise description of what this step does.
 - "intent": a short action verb or phrase (e.g. "inspect", "read_file", \
 "list_directory", "run_command", "search", "analyze").
@@ -41,6 +42,16 @@ that do not exist.
 - Keep plans focused and minimal — only the steps genuinely needed.
 - If the goal is unclear, produce a single clarification step with \
 intent "clarify".
+- "needs_replanning": set this to true only when you already know, right \
+now, that this plan's steps will not be enough on their own — for example \
+a later action depends on information a step in this same plan hasn't \
+discovered yet (e.g. reading a file whose name a directory listing will \
+reveal). In that case, plan only the steps you can already justify and \
+set "needs_replanning": true; you will be shown the resulting \
+observations and asked to plan the rest afterward. For an ordinary \
+request whose steps you can fully specify now, omit this field or set it \
+to false — the plan will be considered complete once those steps finish, \
+with no extra step or call required.
 """
 
 
@@ -149,6 +160,8 @@ def _validate_and_build_plan(raw: dict[str, Any]) -> ExecutionPlan:
     plan_metadata: dict[str, Any] = {}
     if "goal" in raw and isinstance(raw["goal"], str):
         plan_metadata["goal"] = raw["goal"]
+    if raw.get("needs_replanning") is True:
+        plan_metadata["needs_replanning"] = True
 
     return ExecutionPlan(steps=tuple(plan_steps), metadata=plan_metadata)
 
