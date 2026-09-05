@@ -71,6 +71,22 @@ class TaskExecutor:
                 or ""
             ).strip().lower()
 
+            meta = task_input.step_metadata
+            is_github = (
+                meta.get("capability") == "github"
+                or "owner" in meta
+                or (isinstance(meta.get("arguments"), dict) and "owner" in meta["arguments"])
+                or (isinstance(meta.get("args"), dict) and "owner" in meta["args"])
+                or (isinstance(meta.get("params"), dict) and "owner" in meta["params"])
+                or (isinstance(meta.get("parameters"), dict) and "owner" in meta["parameters"])
+                or (isinstance(meta.get("repo"), str) and "/" in meta["repo"])
+                or (isinstance(meta.get("repository"), str) and "/" in meta["repository"])
+            )
+            if is_github:
+                gh_intent = f"github_{intent}"
+                if gh_intent in self.handlers:
+                    return self.handlers[gh_intent]
+
             if intent in self.handlers:
                 return self.handlers[intent]
 
