@@ -20,7 +20,7 @@ def create_brain() -> Brain:
     router = DefaultModelRouter([provider])
     planning_agent = PlanningAgent(router=router)
     planner = AgentPlanner(handler=planning_agent)
-    executor = create_mixed_task_executor()
+    executor = create_mixed_task_executor(model_router=router)
     memory = InMemoryStore()
 
     return Brain(

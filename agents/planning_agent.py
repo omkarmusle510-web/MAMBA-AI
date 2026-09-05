@@ -34,8 +34,11 @@ Rules:
 - "description": a clear, concise description of what this step does.
 - "intent": a short action verb or phrase (e.g. "inspect", "read_file", \
 "list_directory", "run_command", "search", "analyze").
-- "metadata": an object with any additional key-value context for the step \
-(can be empty {}).
+- "metadata": an object with structured arguments for the step. For terminal \
+intents ("run_command", "execute_command"), metadata MUST include "executable" \
+and "args" (e.g. {"executable": "python", "args": ["-V"]}) or "command" \
+(e.g. {"command": "python -V"}). For other steps, metadata can be empty {} \
+or contain relevant parameters.
 - Steps must be grounded in the user's request. Do not invent capabilities \
 that do not exist.
 - Do not claim actions have already been performed.

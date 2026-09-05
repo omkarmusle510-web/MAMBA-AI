@@ -65,11 +65,9 @@ class TaskExecutor:
 
     def _resolve_handler(self, task_input: TaskInput) -> TaskHandler | None:
         if self.handlers:
-            intent = (
-                task_input.step_metadata.get("action")
-                or task_input.intent
-                or ""
-            ).strip().lower()
+            action = str(task_input.step_metadata.get("action") or "").strip().lower()
+            raw_intent = (task_input.intent or "").strip().lower()
+            candidates = [c for c in (action, raw_intent) if c]
 
             meta = task_input.step_metadata
             is_github = (
@@ -83,16 +81,19 @@ class TaskExecutor:
                 or (isinstance(meta.get("repository"), str) and "/" in meta["repository"])
             )
             if is_github:
-                gh_intent = f"github_{intent}"
-                if gh_intent in self.handlers:
-                    return self.handlers[gh_intent]
+                for cand in candidates:
+                    gh_intent = f"github_{cand}"
+                    if gh_intent in self.handlers:
+                        return self.handlers[gh_intent]
 
-            if intent in self.handlers:
-                return self.handlers[intent]
+            for cand in candidates:
+                if cand in self.handlers:
+                    return self.handlers[cand]
 
-            for key, h in self.handlers.items():
-                if key.strip().lower() == intent:
-                    return h
+            for cand in candidates:
+                for key, h in self.handlers.items():
+                    if key.strip().lower() == cand:
+                        return h
 
             return self.handler
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from models.protocols import ModelRouter
 from tasks.executor import TaskExecutor
 from tasks.protocols import TaskHandler
 from tools.github.tool import GitHubClient
@@ -12,6 +13,7 @@ from tools.github.types import GitHubCredential
 from tools.protocols import ToolExecutor
 from tools.tool import BaseTool
 
+from .analyze import AnalyzeSkill, AnalyzeTaskHandler
 from .filesystem import (
     CreateDirectorySkill,
     DeleteSkill,
@@ -91,6 +93,23 @@ _GITHUB_INTENTS = frozenset(
     }
 )
 
+_ANALYZE_INTENTS = frozenset(
+    {
+        "analyze",
+        "analysis",
+        "calculate",
+        "calculation",
+        "reason",
+        "reasoning",
+        "compute",
+        "computation",
+        "evaluate",
+        "eval",
+        "math",
+        "arithmetic",
+    }
+)
+
 
 def create_mixed_task_executor(
     *,
@@ -106,9 +125,12 @@ def create_mixed_task_executor(
     github_token: str | None = None,
     github_timeout: float = 30.0,
     github_handler: TaskHandler | None = None,
+    model_router: ModelRouter | None = None,
+    analyze_skill: AnalyzeSkill | None = None,
+    analyze_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, and GitHub capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, and analyze capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -145,6 +167,14 @@ def create_mixed_task_executor(
             search_code_skill=SearchCodeSkill(client=c, executor=tool_executor),
         )
 
+    if analyze_handler is None:
+        if analyze_skill is not None:
+            analyze_handler = AnalyzeTaskHandler(analyze_skill=analyze_skill)
+        elif model_router is not None:
+            analyze_handler = AnalyzeTaskHandler(
+                analyze_skill=AnalyzeSkill(model_router=model_router)
+            )
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -154,6 +184,10 @@ def create_mixed_task_executor(
 
     for intent in _GITHUB_INTENTS:
         handlers[intent] = github_handler
+
+    if analyze_handler is not None:
+        for intent in _ANALYZE_INTENTS:
+            handlers[intent] = analyze_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)

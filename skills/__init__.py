@@ -1,5 +1,10 @@
 """Mamba Skills layer."""
 
+from .analyze import (
+    AnalyzeSkill,
+    AnalyzeTaskHandler,
+    create_analyze_task_executor,
+)
 from .errors import SkillError, SkillExecutionError
 from .filesystem import (
     CreateDirectorySkill,
@@ -34,6 +39,8 @@ from .terminal import (
 from .types import SkillInput, SkillOutput
 
 __all__ = [
+    "AnalyzeSkill",
+    "AnalyzeTaskHandler",
     "BaseSkill",
     "CreateDirectorySkill",
     "DeleteSkill",
@@ -60,6 +67,7 @@ __all__ = [
     "TerminalSkill",
     "TerminalTaskHandler",
     "WriteFileSkill",
+    "create_analyze_task_executor",
     "create_filesystem_task_executor",
     "create_github_task_executor",
     "create_mixed_task_executor",
