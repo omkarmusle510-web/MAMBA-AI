@@ -11,6 +11,18 @@ from .filesystem import (
     WriteFileSkill,
     create_filesystem_task_executor,
 )
+from .github import (
+    GetIssueSkill,
+    GetPullRequestSkill,
+    GetRepositorySkill,
+    GitHubListDirectorySkill,
+    GitHubReadFileSkill,
+    GitHubTaskHandler,
+    ListIssuesSkill,
+    ListPullRequestsSkill,
+    SearchCodeSkill,
+    create_github_task_executor,
+)
 from .mixed import create_mixed_task_executor
 from .protocols import SkillHandler
 from .skill import BaseSkill, Skill, SkillTaskHandler
@@ -27,8 +39,17 @@ __all__ = [
     "DeleteSkill",
     "FilesystemSkill",
     "FilesystemTaskHandler",
+    "GetIssueSkill",
+    "GetPullRequestSkill",
+    "GetRepositorySkill",
+    "GitHubListDirectorySkill",
+    "GitHubReadFileSkill",
+    "GitHubTaskHandler",
     "ListDirectorySkill",
+    "ListIssuesSkill",
+    "ListPullRequestsSkill",
     "ReadFileSkill",
+    "SearchCodeSkill",
     "Skill",
     "SkillError",
     "SkillExecutionError",
@@ -40,6 +61,7 @@ __all__ = [
     "TerminalTaskHandler",
     "WriteFileSkill",
     "create_filesystem_task_executor",
+    "create_github_task_executor",
     "create_mixed_task_executor",
     "create_terminal_task_executor",
 ]
