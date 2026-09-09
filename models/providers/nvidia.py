@@ -18,7 +18,7 @@ from ..errors import ModelProviderError
 from ..provider import BaseModelProvider
 from ..types import ModelInfo, ModelMessage, ModelRequest, ModelResponse
 
-_DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+_DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 _DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 _DEFAULT_TIMEOUT_SECONDS = 60
 _ENV_KEY = "NVIDIA_API_KEY"
