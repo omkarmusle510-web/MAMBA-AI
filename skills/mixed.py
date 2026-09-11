@@ -34,6 +34,7 @@ from .github import (
     ListPullRequestsSkill,
     SearchCodeSkill,
 )
+from .screen import ScreenTaskHandler
 from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
 
@@ -163,6 +164,26 @@ _SYSTEM_INTENTS = frozenset(
     }
 )
 
+_SCREEN_INTENTS = frozenset(
+    {
+        "screenshot",
+        "take_screenshot",
+        "capture_screen",
+        "screen_capture",
+        "region_screenshot",
+        "capture_region",
+        "region_capture",
+        "ocr",
+        "read_screen",
+        "screen_text",
+        "read_text",
+        "region_ocr",
+        "read_region",
+        "region_text",
+        "region_read",
+    }
+)
+
 
 def create_mixed_task_executor(
     *,
@@ -183,9 +204,10 @@ def create_mixed_task_executor(
     analyze_handler: TaskHandler | None = None,
     desktop_handler: TaskHandler | None = None,
     system_handler: TaskHandler | None = None,
+    screen_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, and system capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, and screen capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -236,6 +258,9 @@ def create_mixed_task_executor(
     if system_handler is None:
         system_handler = SystemTaskHandler()
 
+    if screen_handler is None:
+        screen_handler = ScreenTaskHandler()
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -255,6 +280,9 @@ def create_mixed_task_executor(
 
     for intent in _SYSTEM_INTENTS:
         handlers[intent] = system_handler
+
+    for intent in _SCREEN_INTENTS:
+        handlers[intent] = screen_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)

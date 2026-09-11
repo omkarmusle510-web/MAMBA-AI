@@ -41,6 +41,13 @@ from .github import (
 )
 from .mixed import create_mixed_task_executor
 from .protocols import SkillHandler
+from .screen import (
+    OCRSkill,
+    RegionOCRSkill,
+    RegionScreenshotSkill,
+    ScreenTaskHandler,
+    ScreenshotSkill,
+)
 from .skill import BaseSkill, Skill, SkillTaskHandler
 from .system import (
     GpuInfoSkill,
@@ -79,8 +86,13 @@ __all__ = [
     "ListDirectorySkill",
     "ListIssuesSkill",
     "ListPullRequestsSkill",
+    "OCRSkill",
     "ReadFileSkill",
     "ReadClipboardSkill",
+    "RegionOCRSkill",
+    "RegionScreenshotSkill",
+    "ScreenTaskHandler",
+    "ScreenshotSkill",
     "SearchCodeSkill",
     "Skill",
     "SkillError",
