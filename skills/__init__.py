@@ -5,6 +5,17 @@ from .analyze import (
     AnalyzeTaskHandler,
     create_analyze_task_executor,
 )
+from .desktop import (
+    ClearClipboardSkill,
+    CloseWindowSkill,
+    DesktopTaskHandler,
+    FindWindowSkill,
+    FocusWindowSkill,
+    GetForegroundWindowSkill,
+    GetWindowTitleSkill,
+    ReadClipboardSkill,
+    WriteClipboardSkill,
+)
 from .errors import SkillError, SkillExecutionError
 from .filesystem import (
     CreateDirectorySkill,
@@ -31,6 +42,11 @@ from .github import (
 from .mixed import create_mixed_task_executor
 from .protocols import SkillHandler
 from .skill import BaseSkill, Skill, SkillTaskHandler
+from .system import (
+    GpuInfoSkill,
+    SystemInfoSkill,
+    SystemTaskHandler,
+)
 from .terminal import (
     TerminalSkill,
     TerminalTaskHandler,
@@ -42,20 +58,29 @@ __all__ = [
     "AnalyzeSkill",
     "AnalyzeTaskHandler",
     "BaseSkill",
+    "ClearClipboardSkill",
+    "CloseWindowSkill",
     "CreateDirectorySkill",
     "DeleteSkill",
+    "DesktopTaskHandler",
     "FilesystemSkill",
     "FilesystemTaskHandler",
+    "FindWindowSkill",
+    "FocusWindowSkill",
+    "GetForegroundWindowSkill",
     "GetIssueSkill",
     "GetPullRequestSkill",
     "GetRepositorySkill",
+    "GetWindowTitleSkill",
     "GitHubListDirectorySkill",
     "GitHubReadFileSkill",
     "GitHubTaskHandler",
+    "GpuInfoSkill",
     "ListDirectorySkill",
     "ListIssuesSkill",
     "ListPullRequestsSkill",
     "ReadFileSkill",
+    "ReadClipboardSkill",
     "SearchCodeSkill",
     "Skill",
     "SkillError",
@@ -64,8 +89,11 @@ __all__ = [
     "SkillInput",
     "SkillOutput",
     "SkillTaskHandler",
+    "SystemInfoSkill",
+    "SystemTaskHandler",
     "TerminalSkill",
     "TerminalTaskHandler",
+    "WriteClipboardSkill",
     "WriteFileSkill",
     "create_analyze_task_executor",
     "create_filesystem_task_executor",

@@ -14,6 +14,7 @@ from tools.protocols import ToolExecutor
 from tools.tool import BaseTool
 
 from .analyze import AnalyzeSkill, AnalyzeTaskHandler
+from .desktop import DesktopTaskHandler
 from .filesystem import (
     CreateDirectorySkill,
     DeleteSkill,
@@ -33,6 +34,7 @@ from .github import (
     ListPullRequestsSkill,
     SearchCodeSkill,
 )
+from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
 
 _FILESYSTEM_INTENTS = frozenset(
@@ -110,6 +112,57 @@ _ANALYZE_INTENTS = frozenset(
     }
 )
 
+_DESKTOP_INTENTS = frozenset(
+    {
+        "get_foreground_window",
+        "foreground_window",
+        "active_window",
+        "get_active_window",
+        "get_window_title",
+        "window_title",
+        "find_window",
+        "search_window",
+        "find_windows",
+        "focus_window",
+        "switch_window",
+        "activate_window",
+        "focus",
+        "close_window",
+        "terminate_window",
+        "kill_window",
+        "destroy_window",
+        "read_clipboard",
+        "get_clipboard",
+        "clipboard_read",
+        "paste",
+        "write_clipboard",
+        "set_clipboard",
+        "copy_to_clipboard",
+        "clipboard_write",
+        "copy",
+        "clear_clipboard",
+        "empty_clipboard",
+        "clipboard_clear",
+    }
+)
+
+_SYSTEM_INTENTS = frozenset(
+    {
+        "system_info",
+        "sys_info",
+        "system_status",
+        "os_info",
+        "host_info",
+        "specs",
+        "system",
+        "gpu_info",
+        "nvidia_info",
+        "cuda_info",
+        "gpu_status",
+        "gpu",
+    }
+)
+
 
 def create_mixed_task_executor(
     *,
@@ -128,9 +181,11 @@ def create_mixed_task_executor(
     model_router: ModelRouter | None = None,
     analyze_skill: AnalyzeSkill | None = None,
     analyze_handler: TaskHandler | None = None,
+    desktop_handler: TaskHandler | None = None,
+    system_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, and analyze capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, and system capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -175,6 +230,12 @@ def create_mixed_task_executor(
                 analyze_skill=AnalyzeSkill(model_router=model_router)
             )
 
+    if desktop_handler is None:
+        desktop_handler = DesktopTaskHandler()
+
+    if system_handler is None:
+        system_handler = SystemTaskHandler()
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -189,8 +250,13 @@ def create_mixed_task_executor(
         for intent in _ANALYZE_INTENTS:
             handlers[intent] = analyze_handler
 
+    for intent in _DESKTOP_INTENTS:
+        handlers[intent] = desktop_handler
+
+    for intent in _SYSTEM_INTENTS:
+        handlers[intent] = system_handler
+
     if extra_handlers:
         handlers.update(extra_handlers)
 
     return TaskExecutor(handlers=handlers)
-

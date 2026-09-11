@@ -32,13 +32,15 @@ Rules:
   {"steps": [{"description": "...", "intent": "...", "metadata": {}}], \
 "needs_replanning": false}
 - "description": a clear, concise description of what this step does.
-- "intent": a short action verb or phrase (e.g. "inspect", "read_file", \
-"list_directory", "run_command", "search", "analyze").
-- "metadata": an object with structured arguments for the step. For terminal \
-intents ("run_command", "execute_command"), metadata MUST include "executable" \
-and "args" (e.g. {"executable": "python", "args": ["-V"]}) or "command" \
-(e.g. {"command": "python -V"}). For other steps, metadata can be empty {} \
-or contain relevant parameters.
+- "intent": a short action verb or phrase.
+- "metadata": structured operational arguments for the step. Do NOT include \
+security or permission fields (risk_level, destructive, approved) in metadata.
+  * terminal ("run_command", "execute_command"): {"executable": "python", "args": ["-V"]} or {"command": "python -V"}
+  * filesystem: "list_directory" ({"path": "."}), "read_file" ({"path": "..."}), "write_file" ({"path": "...", "content": "..."}), "delete_file" ({"path": "..."})
+  * reasoning: "analyze" ({})
+  * windows: "get_foreground_window" ({}), "get_window_title" ({"hwnd": <int>}), "find_window" ({"query": "<title>"}), "focus_window" ({"query": "..."} or {"hwnd": <int>}), "close_window" ({"query": "..."} or {"hwnd": <int>})
+  * clipboard: "read_clipboard" ({}), "write_clipboard" ({"text": "<string>"}), "clear_clipboard" ({})
+  * system: "system_info" ({}), "gpu_info" ({})
 - Steps must be grounded in the user's request. Do not invent capabilities \
 that do not exist.
 - Do not claim actions have already been performed.

@@ -9,10 +9,12 @@ from memory.protocols import MemoryStore
 from memory.types import MemoryEntry, MemoryQuery
 from models.protocols import ModelProvider, ModelRouter
 from models.types import ModelRequest
+from permissions.policy import DefaultPermissionPolicy
 from permissions.protocols import PermissionPolicy
 from permissions.types import PermissionDecision, PermissionRequest, RiskLevel
 from verification.protocols import Verifier
 from verification.types import UNAVAILABLE, VerificationRequest, VerificationStatus
+from verification.verifier import DefaultVerifier
 
 from .context import ExecutionContext
 from .errors import CoreError
@@ -77,6 +79,12 @@ class Brain:
     verifier: Verifier | None = None
     model_router: ModelRouter | None = None
     max_cycles: int = _DEFAULT_MAX_CYCLES
+
+    def __post_init__(self) -> None:
+        if self.permissions is None:
+            self.permissions = DefaultPermissionPolicy()
+        if self.verifier is None:
+            self.verifier = DefaultVerifier()
 
     def run(self, request: str | UserRequest) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle."""
@@ -339,13 +347,23 @@ class Brain:
         if self.permissions is None:
             return True, ""
 
-        action = step.metadata.get("action") or step.intent or "execute"
+        cap_meta: dict[str, Any] = {}
+        if hasattr(self.executor, "get_metadata"):
+            try:
+                cap_meta = dict(self.executor.get_metadata(step) or {})
+            except Exception:
+                cap_meta = {}
+
+        action = cap_meta.get("action") or step.metadata.get("action") or step.intent or "execute"
         tool_name = (
-            step.metadata.get("tool_name")
+            cap_meta.get("tool_name")
+            or step.metadata.get("tool_name")
             or step.metadata.get("capability")
             or "step"
         )
-        risk_val = step.metadata.get("risk_level", RiskLevel.LOW)
+
+        # Authoritative security classification from capability/tool metadata takes precedence
+        risk_val = cap_meta.get("risk_level") or step.metadata.get("risk_level", RiskLevel.LOW)
 
         if isinstance(risk_val, str):
             try:
@@ -357,13 +375,18 @@ class Brain:
         else:
             risk_level = RiskLevel.LOW
 
+        merged_metadata = dict(step.metadata)
+        for sensitive_key in ("destructive", "user_sensitive", "irreversible", "externally_visible"):
+            if cap_meta.get(sensitive_key) is True:
+                merged_metadata[sensitive_key] = True
+
         perm_req = PermissionRequest(
             action=action,
             tool_name=tool_name,
             risk_level=risk_level,
             resource=step.metadata.get("resource"),
             reason=step.description,
-            metadata=dict(step.metadata),
+            metadata=merged_metadata,
         )
 
         try:
@@ -375,10 +398,30 @@ class Brain:
             return False, f"permission denied: {perm_res.reason}"
 
         if perm_res.decision == PermissionDecision.ASK:
-            approved = (
-                step.metadata.get("approved") is True
-                or context.request.metadata.get("approved") is True
+            is_destructive = (
+                merged_metadata.get("destructive") is True
+                or "destructive" in perm_res.metadata.get("escalation_flags", [])
             )
+            if is_destructive:
+                approved = (
+                    step.metadata.get("approved") is True
+                    or context.request.metadata.get("approved") is True
+                )
+            else:
+                goal_lower = context.request.goal.lower()
+                step_intent = step.intent.lower()
+                step_action = str(step.metadata.get("action") or "").lower()
+                explicitly_requested = (
+                    step_intent in goal_lower
+                    or step_action in goal_lower
+                    or ("clipboard" in goal_lower and ("clipboard" in step_intent or "clipboard" in step_action))
+                    or ("window" in goal_lower and ("window" in step_intent or "window" in step_action))
+                )
+                approved = (
+                    step.metadata.get("approved") is True
+                    or context.request.metadata.get("approved") is True
+                    or explicitly_requested
+                )
             if not approved:
                 return False, f"action requires user approval: {perm_res.reason}"
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from core.context import ExecutionContext
 from core.types import Observation, PlanStep
@@ -62,6 +63,27 @@ class TaskExecutor:
             task.output = output
 
         return _to_observation(task_input.step_id, output)
+
+    def get_metadata(self, step: PlanStep, context: ExecutionContext | None = None) -> dict[str, Any]:
+        """Resolve authoritative capability metadata for a plan step."""
+        if context is not None:
+            task_input = TaskInput.from_step(step, context)
+        else:
+            task_input = TaskInput(
+                step_id=step.id,
+                description=step.description,
+                intent=step.intent,
+                execution_id="",
+                goal="",
+                step_metadata=dict(step.metadata),
+            )
+        handler = self._resolve_handler(task_input)
+        if handler is not None and hasattr(handler, "get_metadata"):
+            try:
+                return dict(handler.get_metadata(task_input) or {})
+            except Exception:
+                return {}
+        return {}
 
     def _resolve_handler(self, task_input: TaskInput) -> TaskHandler | None:
         if self.handlers:
