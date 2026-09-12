@@ -11,11 +11,188 @@ from .errors import TerminalValidationError
 
 TERMINAL_TOOL_METADATA: dict[str, Any] = {
     "action": "execute_command",
-    "destructive": True,
-    "user_sensitive": True,
+    "destructive": False,
+    "user_sensitive": False,
     "irreversible": False,
-    "risk_level": "high",
+    "risk_level": "medium",
 }
+
+READ_ONLY_GIT_SUBCOMMANDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "log",
+        "diff",
+        "branch",
+        "show",
+        "tag",
+        "remote",
+        "version",
+        "rev-parse",
+        "describe",
+        "ls-files",
+        "help",
+        "config",
+    }
+)
+
+SYSTEM_READ_COMMANDS: frozenset[str] = frozenset(
+    {
+        "echo",
+        "dir",
+        "type",
+        "cat",
+        "ls",
+        "pwd",
+        "whoami",
+        "hostname",
+        "uname",
+        "where",
+        "which",
+        "ipconfig",
+        "ifconfig",
+        "uptime",
+        "date",
+        "time",
+        "id",
+    }
+)
+
+DESTRUCTIVE_COMMANDS: frozenset[str] = frozenset(
+    {
+        "del",
+        "rm",
+        "rmdir",
+        "erase",
+        "format",
+        "shred",
+    }
+)
+
+
+def classify_terminal_command(
+    executable: str,
+    args: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Classify risk and safety metadata dynamically for a terminal command."""
+    exe_name = Path(executable).name.lower()
+    exe_stem = Path(executable).stem.lower()
+
+    clean_args = [str(a).strip() for a in args]
+
+    # Git command inspection
+    if exe_stem == "git" or exe_name.startswith("git"):
+        subcommand = ""
+        sub_idx = 0
+        i = 0
+        while i < len(clean_args):
+            arg = clean_args[i]
+            if arg in ("-C", "-c", "--git-dir", "--work-tree"):
+                i += 2
+                continue
+            if arg.startswith("-"):
+                i += 1
+                continue
+            subcommand = arg.lower()
+            sub_idx = i
+            break
+
+        remaining_args = [a.lower() for a in clean_args[sub_idx + 1:]] if subcommand else []
+
+        # 1. git reset --hard
+        if subcommand == "reset" and "--hard" in remaining_args:
+            return {
+                "action": "git_reset_hard",
+                "destructive": True,
+                "user_sensitive": True,
+                "irreversible": True,
+                "risk_level": "high",
+            }
+
+        # 2. git clean -f, -fd, -fx, etc.
+        if subcommand == "clean" and any(
+            "-f" in a or a.startswith("-f") or "--force" in a for a in remaining_args
+        ):
+            return {
+                "action": "git_clean_force",
+                "destructive": True,
+                "user_sensitive": True,
+                "irreversible": True,
+                "risk_level": "high",
+            }
+
+        # 3. branch deletion: git branch -d / -D / --delete
+        if subcommand == "branch" and any(
+            a in ("-d", "-D", "--delete") or a.startswith("-d") or a.startswith("-D")
+            for a in remaining_args
+        ):
+            return {
+                "action": "git_branch_delete",
+                "destructive": True,
+                "user_sensitive": False,
+                "irreversible": True,
+                "risk_level": "high",
+            }
+
+        # 4. force push: git push --force / -f
+        if subcommand == "push" and any(
+            a in ("--force", "-f", "--force-with-lease") or a.startswith("-f")
+            for a in remaining_args
+        ):
+            return {
+                "action": "git_push_force",
+                "destructive": True,
+                "user_sensitive": True,
+                "irreversible": True,
+                "risk_level": "high",
+            }
+
+        # Read-only git operations
+        if subcommand in READ_ONLY_GIT_SUBCOMMANDS or not subcommand:
+            return {
+                "action": f"git_{subcommand}" if subcommand else "git",
+                "destructive": False,
+                "user_sensitive": False,
+                "irreversible": False,
+                "risk_level": "low",
+            }
+
+        # Non-destructive normal git operations (add, commit, checkout, switch, pull, fetch, clone, etc.)
+        return {
+            "action": f"git_{subcommand}",
+            "destructive": False,
+            "user_sensitive": False,
+            "irreversible": False,
+            "risk_level": "medium",
+        }
+
+    # Explicit destructive system commands
+    if exe_stem in DESTRUCTIVE_COMMANDS or exe_name in DESTRUCTIVE_COMMANDS:
+        return {
+            "action": "execute_command",
+            "destructive": True,
+            "user_sensitive": True,
+            "irreversible": True,
+            "risk_level": "high",
+        }
+
+    # System read-only information commands
+    if exe_stem in SYSTEM_READ_COMMANDS or exe_name in SYSTEM_READ_COMMANDS:
+        return {
+            "action": "execute_command",
+            "destructive": False,
+            "user_sensitive": False,
+            "irreversible": False,
+            "risk_level": "low",
+        }
+
+    # Default for normal development commands
+    return {
+        "action": "execute_command",
+        "destructive": False,
+        "user_sensitive": False,
+        "irreversible": False,
+        "risk_level": "medium",
+    }
 
 DISALLOWED_SHELL_NAMES: frozenset[str] = frozenset(
     {

@@ -25,7 +25,7 @@ _SENSITIVE_METADATA_KEYS = frozenset(
 
 _BASE_DECISIONS: dict[RiskLevel, PermissionDecision] = {
     RiskLevel.LOW: PermissionDecision.ALLOW,
-    RiskLevel.MEDIUM: PermissionDecision.ASK,
+    RiskLevel.MEDIUM: PermissionDecision.ALLOW,
     RiskLevel.HIGH: PermissionDecision.ASK,
     RiskLevel.CRITICAL: PermissionDecision.DENY,
 }
@@ -99,27 +99,26 @@ class DefaultPermissionPolicy:
         reasons: list[str] = []
 
         if "externally_visible" in flags:
-            escalated = _raise_decision(escalated, PermissionDecision.ASK)
-            reasons.append("externally_visible requires user approval")
+            if risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}:
+                escalated = _raise_decision(escalated, PermissionDecision.ASK)
+                reasons.append("externally_visible requires user approval at high risk")
 
         if "user_sensitive" in flags:
-            escalated = _raise_decision(escalated, PermissionDecision.ASK)
-            reasons.append("user_sensitive requires user approval")
+            if risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}:
+                escalated = _raise_decision(escalated, PermissionDecision.ASK)
+                reasons.append("user_sensitive requires user approval at high risk")
 
         if "destructive" in flags:
-            if risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}:
+            if risk_level == RiskLevel.CRITICAL:
                 escalated = _raise_decision(escalated, PermissionDecision.DENY)
-                reasons.append("destructive action denied at high or critical risk")
-            else:
+                reasons.append("destructive action denied at critical risk")
+            elif risk_level == RiskLevel.HIGH:
                 escalated = _raise_decision(escalated, PermissionDecision.ASK)
-                reasons.append("destructive action requires user approval")
+                reasons.append("destructive action requires user approval at high risk")
 
         if "irreversible" in flags:
-            escalated = _raise_decision(escalated, PermissionDecision.ASK)
-            reasons.append("irreversible action requires user approval")
-
-        if not reasons:
-            escalated = _raise_decision(escalated, PermissionDecision.ASK)
-            reasons.append("sensitive metadata requires user approval")
+            if risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}:
+                escalated = _raise_decision(escalated, PermissionDecision.ASK)
+                reasons.append("irreversible action requires user approval at high risk")
 
         return escalated, reasons

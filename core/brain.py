@@ -59,6 +59,73 @@ def _plan_signature(plan: ExecutionPlan) -> tuple[tuple[str, str], ...]:
     )
 
 
+_APPROVAL_PHRASES: frozenset[str] = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "sure",
+        "ok",
+        "okay",
+        "approved",
+        "approve",
+        "go ahead",
+        "do it",
+        "proceed",
+        "confirm",
+        "confirmed",
+        "please do",
+        "execute",
+        "run it",
+        "that's fine",
+        "i approve",
+        "affirmative",
+    }
+)
+
+_DENIAL_PHRASES: frozenset[str] = frozenset(
+    {
+        "no",
+        "nope",
+        "nah",
+        "cancel",
+        "don't",
+        "dont",
+        "stop",
+        "never mind",
+        "nevermind",
+        "deny",
+        "denied",
+        "abort",
+        "halt",
+        "do not",
+    }
+)
+
+
+def _is_approval_phrase(text: str) -> bool:
+    clean = text.strip().lower().rstrip(".!?,")
+    return clean in _APPROVAL_PHRASES
+
+
+def _is_denial_phrase(text: str) -> bool:
+    clean = text.strip().lower().rstrip(".!?,")
+    return clean in _DENIAL_PHRASES
+
+
+@dataclass(slots=True)
+class PendingApproval:
+    """Represents a paused step waiting for explicit user confirmation."""
+
+    step: PlanStep
+    context: ExecutionContext
+    plan: ExecutionPlan
+    step_index: int
+    user_request: UserRequest
+    reason: str
+
+
 @dataclass(slots=True)
 class Brain:
     """Observation-driven intelligent execution coordinator for Mamba.
@@ -79,12 +146,16 @@ class Brain:
     verifier: Verifier | None = None
     model_router: ModelRouter | None = None
     max_cycles: int = _DEFAULT_MAX_CYCLES
+    _pending_approval: PendingApproval | None = field(default=None, init=False)
+    _last_turn_context: dict[str, Any] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.permissions is None:
             self.permissions = DefaultPermissionPolicy()
         if self.verifier is None:
             self.verifier = DefaultVerifier()
+        self._pending_approval = None
+        self._last_turn_context = None
 
     def run(self, request: str | UserRequest) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle."""
@@ -102,6 +173,58 @@ class Brain:
                 else f"expected str or UserRequest, got {type(request).__name__}",
             )
 
+        # ── 1b. Prior Turn Context Propagation ──
+        if self._last_turn_context and "prior_turn" not in user_request.metadata:
+            user_request.metadata["prior_turn"] = self._last_turn_context
+
+        # ── 1c. Pending Approval Resolution ──
+        if _is_approval_phrase(user_request.goal):
+            if self._pending_approval is None:
+                context = ExecutionContext.from_request(user_request)
+                context.transition_to(ExecutionState.PLANNING)
+                context.transition_to(ExecutionState.EXECUTING)
+                msg = "There is no pending action requiring approval. Please specify what you would like me to do."
+                obs = Observation(
+                    step_id="unprompted_approval",
+                    content=msg,
+                    success=True,
+                )
+                context.add_observation(obs)
+                context.transition_to(ExecutionState.COMPLETED)
+                res = context.record.to_result(output=msg)
+                self._record_turn_context(user_request, res)
+                return res
+            else:
+                pending = self._pending_approval
+                self._pending_approval = None
+                res = self._resume_pending_approval(pending, user_request)
+                self._record_turn_context(user_request, res)
+                return res
+
+        if _is_denial_phrase(user_request.goal):
+            if self._pending_approval is not None:
+                pending = self._pending_approval
+                self._pending_approval = None
+                context = ExecutionContext.from_request(user_request)
+                context.transition_to(ExecutionState.PLANNING)
+                context.transition_to(ExecutionState.EXECUTING)
+                msg = f"Operation '{pending.step.description}' was cancelled."
+                obs = Observation(
+                    step_id=pending.step.id,
+                    content=msg,
+                    success=True,
+                    metadata={"cancelled": True},
+                )
+                context.add_observation(obs)
+                context.transition_to(ExecutionState.COMPLETED)
+                res = context.record.to_result(output=msg)
+                self._record_turn_context(user_request, res)
+                return res
+
+        # Clear stale pending approval on an unrelated request
+        if self._pending_approval is not None:
+            self._pending_approval = None
+
         # ── 2. Context Assembly ──
         context = ExecutionContext.from_request(user_request)
 
@@ -110,7 +233,9 @@ class Brain:
             return context.record.to_result()
 
         # ── 4. Observation-Driven Execution Loop ──
-        return self._execution_loop(context, user_request)
+        res = self._execution_loop(context, user_request)
+        self._record_turn_context(user_request, res)
+        return res
 
     def route_model(self, request: ModelRequest) -> ModelProvider | None:
         """Route a model request through the model router if configured."""
@@ -197,7 +322,30 @@ class Brain:
             previous_signature = signature
 
             # ── Execute plan steps ──
-            outcome = self._execute_plan(context, plan)
+            outcome = self._execute_plan(context, plan, user_request)
+
+            if outcome == _StepOutcome.AWAITING_APPROVAL:
+                reason = (
+                    self._pending_approval.reason
+                    if self._pending_approval
+                    else "action requires user confirmation"
+                )
+                prompt_msg = (
+                    f"Action requires user confirmation: {reason}. Do you want to proceed?"
+                )
+                obs = Observation(
+                    step_id=(
+                        self._pending_approval.step.id
+                        if self._pending_approval
+                        else "approval"
+                    ),
+                    content=prompt_msg,
+                    success=False,
+                    metadata={"permission_decision": "ask", "awaiting_approval": True},
+                )
+                context.add_observation(obs)
+                context.mark_failed(prompt_msg)
+                return context.record.to_result(output=prompt_msg)
 
             if outcome == _StepOutcome.FAILED:
                 # Context already marked failed
@@ -532,6 +680,7 @@ class _StepOutcome:
     FINISHED = "finished"
     REPLAN = "replan"
     FAILED = "failed"
+    AWAITING_APPROVAL = "awaiting_approval"
 
 
 def create_brain(

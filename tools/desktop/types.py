@@ -81,15 +81,16 @@ DESKTOP_OPERATIONS: dict[DesktopAction, DesktopOperationDefinition] = {
     DesktopAction.FOCUS_WINDOW: DesktopOperationDefinition(
         name=DesktopAction.FOCUS_WINDOW.value,
         description="Bring a target window to the foreground and focus it.",
-        risk_level=RiskLevel.MEDIUM,
+        risk_level=RiskLevel.LOW,
         destructive=False,
+        user_sensitive=False,
     ),
     DesktopAction.CLOSE_WINDOW: DesktopOperationDefinition(
         name=DesktopAction.CLOSE_WINDOW.value,
         description="Send WM_CLOSE to request closing a target window.",
-        risk_level=RiskLevel.MEDIUM,
-        destructive=True,
-        user_sensitive=True,
+        risk_level=RiskLevel.LOW,
+        destructive=False,
+        user_sensitive=False,
     ),
     DesktopAction.READ_CLIPBOARD: DesktopOperationDefinition(
         name=DesktopAction.READ_CLIPBOARD.value,

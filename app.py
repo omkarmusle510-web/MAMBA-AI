@@ -110,6 +110,17 @@ def main() -> None:
         print(f"Failed to initialize Mamba: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # Voice interface mode
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("--voice", "-v", "voice"):
+        from voice import VoiceInterface
+
+        try:
+            voice_app = VoiceInterface(brain)
+            voice_app.voice_loop()
+        except Exception as exc:
+            print(f"Voice interface error: {exc}", file=sys.stderr)
+        return
+
     # One-shot mode if arguments provided
     if len(sys.argv) > 1:
         request_text = " ".join(sys.argv[1:]).strip()
@@ -118,7 +129,7 @@ def main() -> None:
         return
 
     # Interactive input loop
-    print("Mamba AI (type 'exit' or 'quit' to quit)\n")
+    print("Mamba AI (type 'voice' for voice mode, 'exit' or 'quit' to quit)\n")
     while True:
         try:
             user_input = input("mamba> ").strip()
@@ -130,6 +141,15 @@ def main() -> None:
             continue
         if user_input.lower() in ("exit", "quit", "q"):
             break
+        if user_input.lower() in ("voice", "--voice"):
+            from voice import VoiceInterface
+
+            try:
+                voice_app = VoiceInterface(brain)
+                voice_app.voice_loop()
+            except Exception as exc:
+                print(f"Voice interface error: {exc}", file=sys.stderr)
+            continue
 
         result = brain.run(user_input)
         _display_result(result)

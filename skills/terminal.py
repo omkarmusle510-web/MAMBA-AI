@@ -14,7 +14,7 @@ from tasks.types import TaskInput, TaskOutput
 from tools.errors import ToolError
 from tools.protocols import ToolExecutor
 from tools.terminal.tool import TerminalTool
-from tools.terminal.types import TERMINAL_TOOL_METADATA
+from tools.terminal.types import TERMINAL_TOOL_METADATA, classify_terminal_command
 from tools.tool import BaseTool, StandardToolExecutor
 from tools.types import ToolInput
 
@@ -230,6 +230,11 @@ class TerminalTaskHandler:
 
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
         """Return authoritative capability security metadata for terminal intents."""
+        extracted = self.terminal_skill._extract_arguments(task_input.step_metadata)
+        executable = extracted.get("executable")
+        args = extracted.get("args") or ()
+        if executable:
+            return classify_terminal_command(executable, args)
         return dict(TERMINAL_TOOL_METADATA)
 
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:

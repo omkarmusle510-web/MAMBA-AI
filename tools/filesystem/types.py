@@ -53,8 +53,8 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
     FilesystemAction.WRITE_FILE: FilesystemOperationDefinition(
         name=FilesystemAction.WRITE_FILE.value,
         description="Write text content to a file.",
-        destructive=True,
-        user_sensitive=True,
+        destructive=False,
+        user_sensitive=False,
         irreversible=False,
         risk_level="medium",
     ),
