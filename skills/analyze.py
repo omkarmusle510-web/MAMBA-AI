@@ -29,11 +29,24 @@ _ANALYZE_SUPPORTED_INTENTS = frozenset(
         "eval",
         "math",
         "arithmetic",
+        "clarify",
+        "clarification",
+        "respond",
+        "response",
+        "answer",
+        "summarize",
+        "summary",
+        "explain",
+        "explanation",
+        "synthesize",
+        "synthesis",
+        "report",
+        "describe",
     }
 )
 
 _DEFAULT_SYSTEM_INSTRUCTION = (
-    "You are Mamba's analytical reasoning component. "
+    "You are Mamba's analytical reasoning and synthesis component. "
     "Analyze the given task, context, and data, perform any required reasoning, calculation, "
     "or analysis, and provide a clear, accurate, concise, and direct response."
 )
@@ -44,6 +57,10 @@ def _build_analyze_prompt(input: SkillInput) -> str:
     task_input = input.task_input
     context = input.context
 
+    action = str(task_input.step_metadata.get("action") or "").strip().lower()
+    raw_intent = (task_input.intent or "").strip().lower()
+    intent = action if action in _ANALYZE_SUPPORTED_INTENTS else raw_intent
+
     parts: list[str] = []
 
     # Include user's high-level goal
@@ -51,8 +68,20 @@ def _build_analyze_prompt(input: SkillInput) -> str:
     if goal:
         parts.append(f"Goal: {goal}")
 
-    # Include step description
-    if task_input.description:
+    # Specific intent directives
+    if intent in {"clarify", "clarification"}:
+        parts.append(
+            "Task: The user's request is ambiguous or missing necessary information. "
+            "Formulate a direct, clear, polite clarification question to ask the user "
+            "what specific details are needed to proceed."
+        )
+    elif intent in {"summarize", "summary"}:
+        parts.append("Task: Summarize the observations and findings clearly and concisely.")
+    elif intent in {"explain", "explanation"}:
+        parts.append("Task: Provide a clear, thorough explanation addressing the user's goal.")
+    elif intent in {"respond", "response", "answer", "synthesize", "synthesis", "report"}:
+        parts.append("Task: Provide a direct, coherent final response to the user's goal based on the execution findings.")
+    elif task_input.description:
         parts.append(f"Task: {task_input.description}")
 
     # Include step metadata if meaningful
@@ -71,7 +100,7 @@ def _build_analyze_prompt(input: SkillInput) -> str:
         obs_lines: list[str] = []
         for obs in context.observations[-5:]:
             status = "succeeded" if obs.success else "failed"
-            obs_lines.append(f"- [{status}] {obs.content[:300]}")
+            obs_lines.append(f"- [{status}] {obs.content[:2000]}")
         if obs_lines:
             parts.append("Previous step observations:\n" + "\n".join(obs_lines))
 
@@ -84,7 +113,7 @@ class AnalyzeSkill(BaseSkill):
     def __init__(
         self,
         *,
-        model_router: ModelRouter,
+        model_router: ModelRouter | None = None,
         skill: Skill | None = None,
         system_instruction: str | None = None,
         model_parameters: dict[str, Any] | None = None,
@@ -111,6 +140,44 @@ class AnalyzeSkill(BaseSkill):
                 metadata={"error": "unsupported_capability"},
             )
 
+        meta = input.task_input.step_metadata
+        direct_content = (
+            meta.get("content")
+            or meta.get("response")
+            or meta.get("message")
+            or meta.get("text")
+            or (meta.get("question") if intent in {"clarify", "clarification"} else None)
+        )
+        if direct_content and isinstance(direct_content, str) and direct_content.strip():
+            return SkillOutput(
+                content=direct_content.strip(),
+                success=True,
+                metadata={"direct": True, "intent": intent},
+            )
+
+        if self._router is None:
+            if intent in {"clarify", "clarification"}:
+                return SkillOutput(
+                    content=input.task_input.description or "Clarification needed to proceed with the request.",
+                    success=True,
+                    metadata={"direct": True, "intent": intent},
+                )
+            if input.context and input.context.observations:
+                obs_content = "\n".join(
+                    obs.content for obs in input.context.observations if obs.success and obs.content
+                )
+                if obs_content:
+                    return SkillOutput(
+                        content=obs_content,
+                        success=True,
+                        metadata={"synthesized": True, "intent": intent},
+                    )
+            return SkillOutput(
+                content=input.task_input.description or f"Completed {intent} step.",
+                success=True,
+                metadata={"default": True, "intent": intent},
+            )
+
         prompt = _build_analyze_prompt(input)
         request = ModelRequest(
             input=prompt,
@@ -119,8 +186,11 @@ class AnalyzeSkill(BaseSkill):
         )
 
         try:
-            provider = self._router.route(request)
-            response = provider.invoke(request)
+            if hasattr(self._router, "invoke"):
+                response = self._router.invoke(request)
+            else:
+                provider = self._router.route(request)
+                response = provider.invoke(request)
         except Exception as exc:
             return SkillOutput(
                 content=f"Analysis model invocation failed: {exc}",
@@ -163,6 +233,21 @@ class AnalyzeTaskHandler:
     """Adapts AnalyzeSkill to the TaskHandler interface."""
 
     analyze_skill: AnalyzeSkill
+
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Return authoritative capability security metadata for analyze/reasoning intents."""
+        intent = (
+            task_input.step_metadata.get("action")
+            or task_input.intent
+            or ""
+        ).strip().lower()
+        return {
+            "action": intent or "analyze",
+            "risk_level": "low",
+            "destructive": False,
+            "user_sensitive": False,
+            "irreversible": False,
+        }
 
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         skill_input = SkillInput.from_task(task_input, context)

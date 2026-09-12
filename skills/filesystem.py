@@ -579,6 +579,27 @@ class FilesystemTaskHandler:
     create_directory_skill: CreateDirectorySkill
     delete_skill: DeleteSkill
 
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Return authoritative capability security metadata for filesystem intents."""
+        intent = (
+            task_input.step_metadata.get("action")
+            or task_input.intent
+            or ""
+        ).strip().lower()
+
+        if intent in _DELETE_SUPPORTED_INTENTS:
+            return FILESYSTEM_OPERATIONS[FilesystemAction.DELETE].to_metadata()
+        if intent in _WRITE_FILE_SUPPORTED_INTENTS:
+            return FILESYSTEM_OPERATIONS[FilesystemAction.WRITE_FILE].to_metadata()
+        if intent in _CREATE_DIR_SUPPORTED_INTENTS:
+            return FILESYSTEM_OPERATIONS[FilesystemAction.CREATE_DIRECTORY].to_metadata()
+        if intent in _READ_FILE_SUPPORTED_INTENTS:
+            return FILESYSTEM_OPERATIONS[FilesystemAction.READ_FILE].to_metadata()
+        if intent in _LIST_DIR_SUPPORTED_INTENTS:
+            return FILESYSTEM_OPERATIONS[FilesystemAction.LIST_DIRECTORY].to_metadata()
+
+        return {"action": intent, "risk_level": "low"}
+
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         intent = (
             task_input.step_metadata.get("action")

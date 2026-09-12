@@ -28,6 +28,7 @@ class FilesystemOperationDefinition:
     destructive: bool = False
     user_sensitive: bool = False
     irreversible: bool = False
+    risk_level: str = "low"
 
     def to_metadata(self) -> dict[str, Any]:
         """Convert definition to metadata dictionary."""
@@ -36,6 +37,7 @@ class FilesystemOperationDefinition:
             "destructive": self.destructive,
             "user_sensitive": self.user_sensitive,
             "irreversible": self.irreversible,
+            "risk_level": self.risk_level,
         }
 
 
@@ -46,6 +48,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=False,
         user_sensitive=False,
         irreversible=False,
+        risk_level="low",
     ),
     FilesystemAction.WRITE_FILE: FilesystemOperationDefinition(
         name=FilesystemAction.WRITE_FILE.value,
@@ -53,6 +56,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=True,
         user_sensitive=True,
         irreversible=False,
+        risk_level="medium",
     ),
     FilesystemAction.LIST_DIRECTORY: FilesystemOperationDefinition(
         name=FilesystemAction.LIST_DIRECTORY.value,
@@ -60,6 +64,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=False,
         user_sensitive=False,
         irreversible=False,
+        risk_level="low",
     ),
     FilesystemAction.CREATE_DIRECTORY: FilesystemOperationDefinition(
         name=FilesystemAction.CREATE_DIRECTORY.value,
@@ -67,6 +72,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=False,
         user_sensitive=False,
         irreversible=False,
+        risk_level="low",
     ),
     FilesystemAction.DELETE: FilesystemOperationDefinition(
         name=FilesystemAction.DELETE.value,
@@ -74,6 +80,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=True,
         user_sensitive=True,
         irreversible=True,
+        risk_level="high",
     ),
     FilesystemAction.EXISTS: FilesystemOperationDefinition(
         name=FilesystemAction.EXISTS.value,
@@ -81,6 +88,7 @@ FILESYSTEM_OPERATIONS: dict[FilesystemAction, FilesystemOperationDefinition] = {
         destructive=False,
         user_sensitive=False,
         irreversible=False,
+        risk_level="low",
     ),
 }
 

@@ -70,9 +70,9 @@ def create_brain(*, memory: MemoryStore | None = None) -> Brain:
     router = DefaultModelRouter(providers)
     planning_agent = PlanningAgent(router=router)
     planner = AgentPlanner(handler=planning_agent)
-    executor = create_mixed_task_executor(model_router=router)
     if memory is None:
         memory = PersistentStore()
+    executor = create_mixed_task_executor(model_router=router, memory_store=memory)
 
     return Brain(
         planner=planner,

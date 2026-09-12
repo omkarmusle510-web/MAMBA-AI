@@ -228,6 +228,10 @@ class TerminalTaskHandler:
 
     terminal_skill: TerminalSkill
 
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Return authoritative capability security metadata for terminal intents."""
+        return dict(TERMINAL_TOOL_METADATA)
+
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         intent = (
             task_input.step_metadata.get("action")

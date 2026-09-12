@@ -17,14 +17,27 @@ from models.types import ModelImagePart, ModelInfo, ModelMessage, ModelRequest, 
 class FakeProvider:
     """Minimal stand-in satisfying the ModelProvider protocol."""
 
-    def __init__(self, provider: str, model: str, capabilities: dict | None = None) -> None:
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        capabilities: dict | None = None,
+        fail_with: Exception | None = None,
+        fail_response: ModelResponse | None = None,
+    ) -> None:
         self._info = ModelInfo(provider=provider, model=model, capabilities=capabilities or {})
+        self._fail_with = fail_with
+        self._fail_response = fail_response
 
     @property
     def info(self) -> ModelInfo:
         return self._info
 
-    def invoke(self, request: ModelRequest) -> ModelResponse:  # pragma: no cover - not exercised
+    def invoke(self, request: ModelRequest) -> ModelResponse:
+        if self._fail_with is not None:
+            raise self._fail_with
+        if self._fail_response is not None:
+            return self._fail_response
         return ModelResponse(content="fake", provider=self._info.provider, model=self._info.model)
 
 
@@ -127,3 +140,48 @@ def test_no_providers_registered_raises():
     router = DefaultModelRouter([])
     with pytest.raises(ModelRoutingError):
         router.route(_text_request())
+
+
+def test_route_candidates_returns_all_matching_providers(providers):
+    router = DefaultModelRouter([providers["nvidia_text"], providers["groq"], providers["gemini"]])
+    candidates = router.route_candidates(_text_request())
+    assert len(candidates) == 3
+    assert candidates[0] is providers["nvidia_text"]
+    assert candidates[1] is providers["groq"]
+    assert candidates[2] is providers["gemini"]
+
+
+def test_invoke_fallback_on_exception(providers):
+    failing_nvidia = FakeProvider(
+        "nvidia", "nvidia/nemotron-3-super-120b-a12b",
+        capabilities={"chat": True, "text_generation": True},
+        fail_with=RuntimeError("rate limit exceeded"),
+    )
+    router = DefaultModelRouter([failing_nvidia, providers["groq"]])
+    resp = router.invoke(_text_request())
+    assert resp.success is True
+    assert resp.provider == "groq"
+    assert resp.metadata.get("fallback_from_primary") is True
+
+
+def test_invoke_fallback_on_unsuccessful_response(providers):
+    unsuccessful_nvidia = FakeProvider(
+        "nvidia", "nvidia/nemotron-3-super-120b-a12b",
+        capabilities={"chat": True, "text_generation": True},
+        fail_response=ModelResponse(content="", provider="nvidia", model="nvidia/nemotron", success=False, error="503 Service Unavailable"),
+    )
+    router = DefaultModelRouter([unsuccessful_nvidia, providers["gemini"]])
+    resp = router.invoke(_text_request())
+    assert resp.success is True
+    assert resp.provider == "gemini"
+    assert resp.metadata.get("fallback_from_primary") is True
+
+
+def test_invoke_all_failing_raises_or_returns_failure():
+    p1 = FakeProvider("p1", "m1", fail_with=RuntimeError("p1 failed"))
+    p2 = FakeProvider("p2", "m2", fail_with=RuntimeError("p2 failed"))
+    router = DefaultModelRouter([p1, p2])
+    with pytest.raises(RuntimeError) as exc_info:
+        router.invoke(_text_request())
+    assert "p2 failed" in str(exc_info.value)
+

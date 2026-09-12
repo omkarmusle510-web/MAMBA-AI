@@ -39,6 +39,11 @@ from .github import (
     SearchCodeSkill,
     create_github_task_executor,
 )
+from .memory import (
+    MemorySkill,
+    MemoryTaskHandler,
+    create_memory_task_executor,
+)
 from .mixed import create_mixed_task_executor
 from .protocols import SkillHandler
 from .screen import (
@@ -88,6 +93,8 @@ __all__ = [
     "ListDirectorySkill",
     "ListIssuesSkill",
     "ListPullRequestsSkill",
+    "MemorySkill",
+    "MemoryTaskHandler",
     "OCRSkill",
     "ReadFileSkill",
     "ReadClipboardSkill",
@@ -115,6 +122,7 @@ __all__ = [
     "create_analyze_task_executor",
     "create_filesystem_task_executor",
     "create_github_task_executor",
+    "create_memory_task_executor",
     "create_mixed_task_executor",
     "create_terminal_task_executor",
 ]

@@ -316,8 +316,9 @@ class Brain:
 
         # ── Evaluate Observation ──
         if not observation.success:
-            # The action failed. Check if re-planning is appropriate.
-            if observation.metadata.get("replan") is True:
+            # The action failed. Allow re-planning so the agent can adapt/recover, unless explicitly forbidden.
+            allow_replan = step.metadata.get("replan_on_failure", True)
+            if observation.metadata.get("replan") is True or allow_replan:
                 return _StepOutcome.REPLAN
             context.mark_failed(observation.content or "step execution failed")
             return _StepOutcome.FAILED
@@ -331,9 +332,21 @@ class Brain:
         if self.verifier is not None and self._needs_verification(step, observation):
             verified, reason = self._verify(step, observation)
             if not verified:
-                # Verification failure may trigger re-planning when the step
-                # metadata explicitly requests it.
-                if step.metadata.get("replan_on_verification_failure") is True:
+                # Verification failure: allow replanning unless explicitly disabled
+                allow_replan = step.metadata.get("replan_on_verification_failure", True)
+                if allow_replan:
+                    verification_obs = Observation(
+                        step_id=step.id,
+                        content=f"Verification failed for step '{step.description}': {reason}",
+                        success=False,
+                        metadata={
+                            "action": "verification",
+                            "step_id": step.id,
+                            "error": reason,
+                            "replan": True,
+                        },
+                    )
+                    context.add_observation(verification_obs)
                     return _StepOutcome.REPLAN
                 context.mark_failed(reason)
                 return _StepOutcome.FAILED

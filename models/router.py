@@ -20,7 +20,7 @@ from typing import Any
 
 from .errors import ModelRoutingError
 from .protocols import ModelProvider
-from .types import ModelInfo, ModelRequest
+from .types import ModelInfo, ModelRequest, ModelResponse
 
 _MULTIMODAL_CAPABILITY_KEYS = ("multimodal", "image")
 
@@ -85,8 +85,8 @@ class DefaultModelRouter:
     def route(self, request: ModelRequest) -> ModelProvider:
         return self.route_with_reason(request).provider
 
-    def route_with_reason(self, request: ModelRequest) -> RoutingDecision:
-        """Resolve a provider for `request`, along with why it was chosen."""
+    def route_candidates(self, request: ModelRequest) -> tuple[ModelProvider, ...]:
+        """Resolve all registered providers satisfying the request in preference order."""
         if not self._providers:
             raise ModelRoutingError("no model providers are registered")
 
@@ -98,10 +98,10 @@ class DefaultModelRouter:
 
         # 1. Explicit provider requirement — validated, never silently rerouted.
         if provider_hint is not None:
-            provider = self._select(
-                self._matching_by_provider(provider_hint),
-                f"provider '{provider_hint}'",
-            )
+            matches = self._matching_by_provider(provider_hint)
+            if not matches:
+                raise ModelRoutingError(f"no provider matching provider '{provider_hint}'")
+            provider = matches[0]
             self._require_multimodal_if_needed(
                 provider, needs_multimodal, f"explicitly requested provider '{provider_hint}'"
             )
@@ -114,20 +114,18 @@ class DefaultModelRouter:
                     f"explicitly requested provider '{provider_hint}' does not support "
                     f"required capability '{capability_hint}'"
                 )
-            return RoutingDecision(
-                provider, f"explicit provider requirement: '{provider_hint}'"
-            )
+            return (provider,)
 
         # 2. Explicit model requirement — validated, never silently rerouted.
         if model_hint is not None:
-            provider = self._select(
-                self._matching_by_model(model_hint),
-                f"model '{model_hint}'",
-            )
+            matches = self._matching_by_model(model_hint)
+            if not matches:
+                raise ModelRoutingError(f"no provider matching model '{model_hint}'")
+            provider = matches[0]
             self._require_multimodal_if_needed(
                 provider, needs_multimodal, f"explicitly requested model '{model_hint}'"
             )
-            return RoutingDecision(provider, f"explicit model requirement: '{model_hint}'")
+            return (provider,)
 
         # 3. Explicit capability requirement narrows the candidate pool.
         candidates = self._providers
@@ -152,15 +150,65 @@ class DefaultModelRouter:
         if not candidates:
             raise ModelRoutingError("no available provider satisfies routing requirements")
 
-        # 5/6. Best available provider; existing provider order is the tie-break.
+        return candidates
+
+    def route_with_reason(self, request: ModelRequest) -> RoutingDecision:
+        """Resolve a provider for `request`, along with why it was chosen."""
+        metadata = request.metadata
+        provider_hint = _routing_hint(metadata, "provider")
+        model_hint = _routing_hint(metadata, "model")
+        capability_hint = _routing_hint(metadata, "capability")
+        needs_multimodal = request.has_images or capability_hint == "multimodal"
+
+        candidates = self.route_candidates(request)
         chosen = candidates[0]
-        if candidates == self._providers:
+
+        if provider_hint is not None:
+            reason = f"explicit provider requirement: '{provider_hint}'"
+        elif model_hint is not None:
+            reason = f"explicit model requirement: '{model_hint}'"
+        elif candidates == self._providers:
             reason = "no explicit requirement; default provider order"
         elif needs_multimodal:
             reason = "selected for required multimodal/image capability"
         else:
             reason = f"selected for required capability '{capability_hint}'"
+
         return RoutingDecision(chosen, reason)
+
+    def invoke(self, request: ModelRequest) -> ModelResponse:
+        """Invoke a provider for `request` with automatic fallback among viable candidates."""
+        candidates = self.route_candidates(request)
+        last_error: Exception | None = None
+        last_response: ModelResponse | None = None
+
+        for i, provider in enumerate(candidates):
+            try:
+                response = provider.invoke(request)
+                if response.success:
+                    if i > 0:
+                        meta = dict(response.metadata)
+                        meta["fallback_from_primary"] = True
+                        meta["fallback_attempt"] = i
+                        return ModelResponse(
+                            content=response.content,
+                            provider=response.provider,
+                            model=response.model,
+                            success=True,
+                            error=None,
+                            metadata=meta,
+                        )
+                    return response
+                last_response = response
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_response is not None:
+            return last_response
+        if last_error is not None:
+            raise last_error
+        raise ModelRoutingError("all candidate model providers failed invocation")
 
     def _require_multimodal_if_needed(
         self, provider: ModelProvider, needs_multimodal: bool, subject: str

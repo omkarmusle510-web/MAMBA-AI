@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from .errors import InvalidVerificationRequestError, VerificationEvaluationError
@@ -79,15 +80,138 @@ class DefaultVerifier:
                 metadata=metadata,
             )
 
-        if _is_unavailable(expected) or _is_unavailable(actual):
-            missing = []
-            if _is_unavailable(expected):
-                missing.append("expected")
-            if _is_unavailable(actual):
-                missing.append("actual")
+        if _is_unavailable(actual):
             return VerificationResult(
                 status=VerificationStatus.INCONCLUSIVE,
-                reason=f"{' and '.join(missing)} value is unavailable for comparison",
+                reason="actual value is unavailable for comparison",
+                evidence=evidence,
+                metadata=metadata,
+            )
+
+        if _is_unavailable(expected):
+            if request.metadata.get("verify") is True:
+                if actual is not None and actual != "" and actual is not False:
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason="step produced non-empty valid output",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason="step produced empty or false output",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            return VerificationResult(
+                status=VerificationStatus.INCONCLUSIVE,
+                reason="expected value is unavailable for comparison",
+                evidence=evidence,
+                metadata=metadata,
+            )
+
+        # Predicate dictionary support
+        if isinstance(expected, dict):
+            if "contains" in expected:
+                substr = str(expected["contains"]).casefold()
+                if substr in str(actual).casefold():
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"actual value contains '{expected['contains']}'",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"actual value does not contain '{expected['contains']}'",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            if "not_contains" in expected:
+                substr = str(expected["not_contains"]).casefold()
+                if substr not in str(actual).casefold():
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"actual value does not contain '{expected['not_contains']}'",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"actual value contains '{expected['not_contains']}'",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            if "pattern" in expected or "regex" in expected:
+                pat = expected.get("pattern") or expected.get("regex")
+                try:
+                    if re.search(str(pat), str(actual)):
+                        return VerificationResult(
+                            status=VerificationStatus.VERIFIED,
+                            reason=f"actual value matches pattern '{pat}'",
+                            evidence=evidence,
+                            metadata=metadata,
+                        )
+                    return VerificationResult(
+                        status=VerificationStatus.FAILED,
+                        reason=f"actual value does not match pattern '{pat}'",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                except re.error as exc:
+                    return VerificationResult(
+                        status=VerificationStatus.INCONCLUSIVE,
+                        reason=f"invalid regex pattern: {exc}",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+            if "exit_code" in expected:
+                exp_code = expected["exit_code"]
+                act_code = (
+                    actual.get("exit_code")
+                    if isinstance(actual, dict)
+                    else (actual if isinstance(actual, int) else None)
+                )
+                if act_code == exp_code:
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"exit code matches expected {exp_code}",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"exit code {act_code} does not match expected {exp_code}",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            if "equals" in expected:
+                if actual == expected["equals"]:
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason="expected and actual values are equal",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason="expected and actual values are not equal",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+
+        if request.metadata.get("match_type") == "contains" or "contains" in request.metadata:
+            target_str = str(request.metadata.get("contains") or expected).casefold()
+            if target_str in str(actual).casefold():
+                return VerificationResult(
+                    status=VerificationStatus.VERIFIED,
+                    reason=f"actual value contains '{target_str}'",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            return VerificationResult(
+                status=VerificationStatus.FAILED,
+                reason=f"actual value does not contain '{target_str}'",
                 evidence=evidence,
                 metadata=metadata,
             )

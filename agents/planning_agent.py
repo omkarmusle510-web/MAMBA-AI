@@ -37,7 +37,8 @@ Rules:
 security or permission fields (risk_level, destructive, approved) in metadata.
   * terminal ("run_command", "execute_command"): {"executable": "python", "args": ["-V"]} or {"command": "python -V"}
   * filesystem: "list_directory" ({"path": "."}), "read_file" ({"path": "..."}), "write_file" ({"path": "...", "content": "..."}), "delete_file" ({"path": "..."})
-  * reasoning: "analyze" ({})
+  * reasoning / response: "analyze" ({}), "respond" ({}), "summarize" ({}), "explain" ({}), "clarify" ({"question": "<clarification question>"})
+  * memory: "remember" ({"content": "<text to remember>"}), "recall" ({"query": "<search query>"}), "delete_memory" ({"id": "<id>"})
   * windows: "get_foreground_window" ({}), "get_window_title" ({"hwnd": <int>}), "find_window" ({"query": "<title>"}), "focus_window" ({"query": "..."} or {"hwnd": <int>}), "close_window" ({"query": "..."} or {"hwnd": <int>})
   * clipboard: "read_clipboard" ({}), "write_clipboard" ({"text": "<string>"}), "clear_clipboard" ({})
   * system: "system_info" ({}), "gpu_info" ({})
@@ -80,7 +81,7 @@ def _build_user_message(input: AgentInput) -> str:
         obs_lines = []
         for obs in observations[-5:]:  # Last 5 observations max.
             status = "succeeded" if obs.success else "failed"
-            obs_lines.append(f"- [{status}] {obs.content[:200]}")
+            obs_lines.append(f"- [{status}] {obs.content[:1500]}")
         parts.append("Previous observations:\n" + "\n".join(obs_lines))
 
     return "\n\n".join(parts)
@@ -231,10 +232,13 @@ class PlanningAgent:
             parameters=dict(self._model_parameters),
         )
 
-        # 2. Route to a provider and invoke.
+        # 2. Route to a provider and invoke (with automatic fallback if supported).
         try:
-            provider = self._router.route(request)
-            response = provider.invoke(request)
+            if hasattr(self._router, "invoke"):
+                response = self._router.invoke(request)
+            else:
+                provider = self._router.route(request)
+                response = provider.invoke(request)
         except Exception as exc:
             return AgentOutput(
                 success=False,

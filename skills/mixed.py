@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from memory.protocols import MemoryStore
 from models.protocols import ModelRouter
 from tasks.executor import TaskExecutor
 from tasks.protocols import TaskHandler
@@ -34,6 +35,7 @@ from .github import (
     ListPullRequestsSkill,
     SearchCodeSkill,
 )
+from .memory import MemorySkill, MemoryTaskHandler
 from .screen import ScreenTaskHandler
 from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
@@ -111,6 +113,37 @@ _ANALYZE_INTENTS = frozenset(
         "eval",
         "math",
         "arithmetic",
+        "clarify",
+        "clarification",
+        "respond",
+        "response",
+        "answer",
+        "summarize",
+        "summary",
+        "explain",
+        "explanation",
+        "synthesize",
+        "synthesis",
+        "report",
+        "describe",
+    }
+)
+
+_MEMORY_INTENTS = frozenset(
+    {
+        "remember",
+        "store_memory",
+        "save_memory",
+        "record_memory",
+        "recall",
+        "search_memory",
+        "retrieve_memory",
+        "get_memory",
+        "query_memory",
+        "delete_memory",
+        "forget",
+        "remove_memory",
+        "clear_memory",
     }
 )
 
@@ -215,9 +248,11 @@ def create_mixed_task_executor(
     system_handler: TaskHandler | None = None,
     screen_handler: TaskHandler | None = None,
     web_handler: TaskHandler | None = None,
+    memory_store: MemoryStore | None = None,
+    memory_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, and web capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, web, and memory capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -261,6 +296,8 @@ def create_mixed_task_executor(
             analyze_handler = AnalyzeTaskHandler(
                 analyze_skill=AnalyzeSkill(model_router=model_router)
             )
+        else:
+            analyze_handler = AnalyzeTaskHandler(analyze_skill=AnalyzeSkill())
 
     if desktop_handler is None:
         desktop_handler = DesktopTaskHandler()
@@ -273,6 +310,10 @@ def create_mixed_task_executor(
 
     if web_handler is None:
         web_handler = WebTaskHandler()
+
+    if memory_handler is None:
+        store = memory_store or InMemoryStore()
+        memory_handler = MemoryTaskHandler(memory_skill=MemorySkill(store=store))
 
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
@@ -299,6 +340,10 @@ def create_mixed_task_executor(
 
     for intent in _WEB_INTENTS:
         handlers[intent] = web_handler
+
+    if memory_handler is not None:
+        for intent in _MEMORY_INTENTS:
+            handlers[intent] = memory_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)

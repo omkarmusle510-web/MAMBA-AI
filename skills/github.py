@@ -725,6 +725,33 @@ class GitHubTaskHandler:
     list_pull_requests_skill: ListPullRequestsSkill
     search_code_skill: SearchCodeSkill
 
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Return authoritative capability security metadata for GitHub intents."""
+        intent = (
+            task_input.step_metadata.get("action")
+            or task_input.intent
+            or ""
+        ).strip().lower()
+
+        if intent in _GET_REPO_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.GET_REPOSITORY].to_metadata()
+        if intent in _READ_FILE_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.READ_FILE].to_metadata()
+        if intent in _LIST_DIR_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.LIST_DIRECTORY].to_metadata()
+        if intent in _GET_ISSUE_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.GET_ISSUE].to_metadata()
+        if intent in _LIST_ISSUES_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.LIST_ISSUES].to_metadata()
+        if intent in _GET_PR_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.GET_PULL_REQUEST].to_metadata()
+        if intent in _LIST_PRS_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.LIST_PULL_REQUESTS].to_metadata()
+        if intent in _SEARCH_CODE_SUPPORTED_INTENTS:
+            return GITHUB_OPERATIONS[GitHubAction.SEARCH_CODE].to_metadata()
+
+        return {"action": intent, "risk_level": "low"}
+
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         intent = (
             task_input.step_metadata.get("action")

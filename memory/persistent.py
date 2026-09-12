@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -15,6 +16,24 @@ from .types import MemoryEntry, MemoryQuery, MemoryResult
 
 _DEFAULT_DB_PATH = ".mamba/memory.db"
 
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
+        "at", "by", "for", "with", "about", "against", "between", "into",
+        "through", "during", "before", "after", "above", "below", "to", "from",
+        "up", "down", "in", "out", "on", "off", "over", "under", "again",
+        "further", "then", "once", "here", "there", "all", "any", "both",
+        "each", "few", "more", "most", "other", "some", "such", "no", "nor",
+        "not", "only", "own", "same", "so", "than", "too", "very", "can",
+        "will", "just", "don", "should", "now", "i", "me", "my", "we", "our",
+        "you", "your", "he", "him", "his", "she", "her", "it", "its", "they",
+        "them", "their", "what", "which", "who", "whom", "this", "that",
+        "these", "those", "am", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "having", "do", "does", "did", "doing",
+        "tell", "show", "give", "get", "find", "please", "recall", "remember",
+    }
+)
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -25,7 +44,28 @@ def _metadata_matches(entry_metadata: dict[str, Any], filters: dict[str, Any]) -
 
 
 def _content_matches(content: str, query: str) -> bool:
-    return query.casefold() in content.casefold()
+    content_lower = content.casefold()
+    query_lower = query.casefold().strip()
+    if not query_lower:
+        return True
+    if query_lower in content_lower:
+        return True
+
+    query_tokens = [
+        t for t in re.findall(r"\w+", query_lower)
+        if len(t) > 1 and t not in _STOPWORDS
+    ]
+    if not query_tokens:
+        return False
+
+    content_tokens = set(re.findall(r"\w+", content_lower))
+    matches = sum(1 for t in query_tokens if t in content_tokens)
+    if matches == len(query_tokens):
+        return True
+    if len(query_tokens) >= 3 and (matches / len(query_tokens)) >= 0.6:
+        return True
+
+    return False
 
 
 def _sort_key(entry: MemoryEntry) -> tuple[datetime, str]:

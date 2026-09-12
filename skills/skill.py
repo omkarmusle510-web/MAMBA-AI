@@ -51,6 +51,17 @@ class SkillTaskHandler:
 
     handler: SkillHandler
 
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Return authoritative capability metadata from the underlying skill or handler."""
+        if hasattr(self.handler, "get_metadata"):
+            try:
+                return dict(self.handler.get_metadata(task_input) or {})
+            except Exception:
+                pass
+        if hasattr(self.handler, "skill") and hasattr(self.handler.skill, "metadata"):
+            return dict(self.handler.skill.metadata or {})
+        return {}
+
     def run(self, task_input: TaskInput, context: ExecutionContext) -> TaskOutput:
         skill_input = SkillInput.from_task(task_input, context)
         return self.handler.run(skill_input).to_task_output()

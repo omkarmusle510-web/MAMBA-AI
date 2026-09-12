@@ -56,7 +56,11 @@ class NVIDIAModelProvider(BaseModelProvider):
         supports_multimodal: bool = False,
         _http_post: Any = None,
     ) -> None:
-        resolved_key = api_key or os.environ.get(_ENV_KEY, "")
+        resolved_key = (
+            api_key
+            or os.environ.get(_ENV_KEY, "").strip()
+            or os.environ.get("api_key", "").strip()
+        )
         if not resolved_key:
             raise ModelProviderError(
                 f"NVIDIA API key is required: set {_ENV_KEY} environment "
