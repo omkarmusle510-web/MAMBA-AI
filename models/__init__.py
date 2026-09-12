@@ -3,7 +3,7 @@
 from .errors import ModelError, ModelProviderError, ModelRequestError, ModelRoutingError
 from .protocols import ModelProvider, ModelRouter
 from .provider import BaseModelProvider
-from .providers import GroqModelProvider, NVIDIAModelProvider
+from .providers import GeminiModelProvider, GroqModelProvider, NVIDIAModelProvider
 from .router import DefaultModelRouter
 from .types import (
     ModelImagePart,
@@ -17,6 +17,7 @@ from .types import (
 __all__ = [
     "BaseModelProvider",
     "DefaultModelRouter",
+    "GeminiModelProvider",
     "GroqModelProvider",
     "ModelError",
     "ModelImagePart",

@@ -10,7 +10,7 @@ from agents.planning_agent import PlanningAgent
 from core.brain import Brain
 from core.types import ExecutionResult, ResultStatus
 from memory import InMemoryStore
-from models import DefaultModelRouter, GroqModelProvider, NVIDIAModelProvider
+from models import DefaultModelRouter, GeminiModelProvider, GroqModelProvider, NVIDIAModelProvider
 from models.errors import ModelProviderError
 from skills import create_mixed_task_executor
 
@@ -55,10 +55,16 @@ def create_brain() -> Brain:
     except ModelProviderError:
         pass
 
+    # Gemini provider — optional; skip if credentials are missing.
+    try:
+        providers.append(GeminiModelProvider())
+    except ModelProviderError:
+        pass
+
     if not providers:
         raise RuntimeError(
-            "No model providers available. Set NVIDIA_API_KEY or GROQ_API_KEY "
-            "in your environment or .env file."
+            "No model providers available. Set NVIDIA_API_KEY, GROQ_API_KEY, "
+            "or GEMINI_API_KEY in your environment or .env file."
         )
 
     router = DefaultModelRouter(providers)
