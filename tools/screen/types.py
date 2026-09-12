@@ -16,6 +16,7 @@ class ScreenAction(StrEnum):
     REGION_SCREENSHOT = "region_screenshot"
     OCR = "ocr"
     REGION_OCR = "region_ocr"
+    VISUAL_UNDERSTANDING = "visual_understanding"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,16 @@ SCREEN_OPERATIONS: dict[ScreenAction, ScreenOperationDefinition] = {
     ScreenAction.REGION_OCR: ScreenOperationDefinition(
         name=ScreenAction.REGION_OCR.value,
         description="Capture a screen region and extract text via OCR.",
+        risk_level=RiskLevel.LOW,
+        destructive=False,
+        user_sensitive=True,
+    ),
+    ScreenAction.VISUAL_UNDERSTANDING: ScreenOperationDefinition(
+        name=ScreenAction.VISUAL_UNDERSTANDING.value,
+        description=(
+            "Capture the current screen and interpret it with a "
+            "multimodal model (visual understanding, not control)."
+        ),
         risk_level=RiskLevel.LOW,
         destructive=False,
         user_sensitive=True,

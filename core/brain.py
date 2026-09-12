@@ -421,6 +421,19 @@ class Brain:
                     step.metadata.get("approved") is True
                     or context.request.metadata.get("approved") is True
                     or explicitly_requested
+                    or (
+                        ("screen" in goal_lower or "screenshot" in goal_lower)
+                        and (
+                            "screen" in step_intent
+                            or "screenshot" in step_intent
+                            or "ocr" in step_intent
+                            or "visual" in step_intent
+                            or "screen" in step_action
+                            or "screenshot" in step_action
+                            or "ocr" in step_action
+                            or "visual" in step_action
+                        )
+                    )
                 )
             if not approved:
                 return False, f"action requires user approval: {perm_res.reason}"
@@ -476,6 +489,14 @@ class Brain:
         """Store execution outcome in memory. Failures are silently absorbed."""
         if self.memory is None:
             return
+
+        # Conservative: do not persist arbitrary sensitive screen interpretations.
+        last = context.observations[-1] if context.observations else None
+        if last is not None:
+            action = str(last.metadata.get("action") or "")
+            if action == "visual_understanding" or last.metadata.get("persist_memory") is False:
+                return
+
         try:
             last_content = _last_observation_content(context)
             self.memory.store(

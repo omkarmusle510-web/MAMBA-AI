@@ -181,6 +181,12 @@ _SCREEN_INTENTS = frozenset(
         "read_region",
         "region_text",
         "region_read",
+        "visual_understanding",
+        "understand_screen",
+        "describe_screen",
+        "look_at_screen",
+        "screen_understanding",
+        "interpret_screen",
     }
 )
 
@@ -259,7 +265,7 @@ def create_mixed_task_executor(
         system_handler = SystemTaskHandler()
 
     if screen_handler is None:
-        screen_handler = ScreenTaskHandler()
+        screen_handler = ScreenTaskHandler(model_router=model_router)
 
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:

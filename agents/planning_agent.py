@@ -41,7 +41,7 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * windows: "get_foreground_window" ({}), "get_window_title" ({"hwnd": <int>}), "find_window" ({"query": "<title>"}), "focus_window" ({"query": "..."} or {"hwnd": <int>}), "close_window" ({"query": "..."} or {"hwnd": <int>})
   * clipboard: "read_clipboard" ({}), "write_clipboard" ({"text": "<string>"}), "clear_clipboard" ({})
   * system: "system_info" ({}), "gpu_info" ({})
-  * screen: "screenshot" ({}), "region_screenshot" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "ocr" ({}), "region_ocr" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>})
+  * screen: "screenshot" ({}), "region_screenshot" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "ocr" ({}), "region_ocr" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "visual_understanding" ({"question": "<what to understand about the screen>"})
 - Steps must be grounded in the user's request. Do not invent capabilities \
 that do not exist.
 - Do not claim actions have already been performed.

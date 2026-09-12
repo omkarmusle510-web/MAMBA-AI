@@ -5,12 +5,20 @@ from .protocols import ModelProvider, ModelRouter
 from .provider import BaseModelProvider
 from .providers import NVIDIAModelProvider
 from .router import DefaultModelRouter
-from .types import ModelInfo, ModelMessage, ModelRequest, ModelResponse
+from .types import (
+    ModelImagePart,
+    ModelInfo,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelTextPart,
+)
 
 __all__ = [
     "BaseModelProvider",
     "DefaultModelRouter",
     "ModelError",
+    "ModelImagePart",
     "ModelInfo",
     "ModelMessage",
     "ModelProvider",
@@ -20,5 +28,6 @@ __all__ = [
     "ModelResponse",
     "ModelRouter",
     "ModelRoutingError",
+    "ModelTextPart",
     "NVIDIAModelProvider",
 ]

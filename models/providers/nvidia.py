@@ -8,6 +8,7 @@ Default model: Nemotron 3.5 Lightning 30B (free tier, agentic-optimized).
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
@@ -16,7 +17,13 @@ from typing import Any
 
 from ..errors import ModelProviderError
 from ..provider import BaseModelProvider
-from ..types import ModelInfo, ModelMessage, ModelRequest, ModelResponse
+from ..types import (
+    ModelImagePart,
+    ModelInfo,
+    ModelRequest,
+    ModelResponse,
+    ModelTextPart,
+)
 
 _DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 _DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
@@ -31,10 +38,12 @@ class NVIDIAModelProvider(BaseModelProvider):
     responses into Mamba's existing ModelResponse type.
 
     Configuration:
-        api_key:    NVIDIA API key (or read from NVIDIA_API_KEY env var).
-        model:      NVIDIA model identifier (default: Nemotron 3.5 Lightning).
-        base_url:   API base URL (default: integrate.api.nvidia.com/v1).
-        timeout:    HTTP timeout in seconds (default: 60).
+        api_key:              NVIDIA API key (or read from NVIDIA_API_KEY env var).
+        model:                NVIDIA model identifier (default: Nemotron 3.5 Lightning).
+        base_url:             API base URL (default: integrate.api.nvidia.com/v1).
+        timeout:              HTTP timeout in seconds (default: 60).
+        supports_multimodal:  When True, advertise multimodal capability and
+                              serialize image message parts for vision models.
     """
 
     def __init__(
@@ -44,6 +53,7 @@ class NVIDIAModelProvider(BaseModelProvider):
         model: str = _DEFAULT_MODEL,
         base_url: str = _DEFAULT_BASE_URL,
         timeout: int = _DEFAULT_TIMEOUT_SECONDS,
+        supports_multimodal: bool = False,
         _http_post: Any = None,
     ) -> None:
         resolved_key = api_key or os.environ.get(_ENV_KEY, "")
@@ -57,21 +67,32 @@ class NVIDIAModelProvider(BaseModelProvider):
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._supports_multimodal = supports_multimodal
         # Injectable HTTP boundary for testing without network access.
         self._http_post = _http_post or self._default_http_post
+
+        capabilities: dict[str, Any] = {
+            "chat": True,
+            "text_generation": True,
+        }
+        if supports_multimodal:
+            capabilities["multimodal"] = True
+            capabilities["image"] = True
 
         info = ModelInfo(
             provider="nvidia",
             model=self._model,
-            capabilities={
-                "chat": True,
-                "text_generation": True,
-            },
+            capabilities=capabilities,
         )
         super().__init__(info)
 
     def invoke(self, request: ModelRequest) -> ModelResponse:
         """Send a chat completion request to the NVIDIA API."""
+        if request.has_images and not self._supports_multimodal:
+            raise ModelProviderError(
+                "configured NVIDIA model does not support multimodal/image input"
+            )
+
         model_to_use = request.model_id or self._model
         messages = self._build_messages(request)
         body = self._build_body(model_to_use, messages, request.parameters)
@@ -108,9 +129,9 @@ class NVIDIAModelProvider(BaseModelProvider):
 
     def _build_messages(
         self, request: ModelRequest,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Convert a ModelRequest into the chat messages list."""
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
 
         if request.system_instruction:
             messages.append({
@@ -120,8 +141,14 @@ class NVIDIAModelProvider(BaseModelProvider):
 
         if request.messages:
             for msg in request.messages:
-                messages.append({"role": msg.role, "content": msg.content})
-            if request.input and (not messages or messages[-1]["content"] != request.input):
+                messages.append({
+                    "role": msg.role,
+                    "content": self._serialize_content(msg.content),
+                })
+            if request.input and (
+                not messages
+                or messages[-1]["content"] != request.input
+            ):
                 messages.append({"role": "user", "content": request.input})
         elif request.input:
             messages.append({"role": "user", "content": request.input})
@@ -131,10 +158,42 @@ class NVIDIAModelProvider(BaseModelProvider):
 
         return messages
 
+    def _serialize_content(
+        self, content: str | tuple[Any, ...],
+    ) -> str | list[dict[str, Any]]:
+        """Serialize text or multimodal message content for the API."""
+        if isinstance(content, str):
+            return content
+
+        parts: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, ModelTextPart):
+                parts.append({"type": "text", "text": part.text})
+            elif isinstance(part, ModelImagePart):
+                if not self._supports_multimodal:
+                    raise ModelProviderError(
+                        "configured NVIDIA model does not support "
+                        "multimodal/image input"
+                    )
+                encoded = base64.b64encode(part.data).decode("ascii")
+                data_url = f"data:{part.media_type};base64,{encoded}"
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": data_url},
+                })
+            else:
+                raise ModelProviderError(
+                    f"unsupported model content part type: {type(part).__name__}"
+                )
+
+        if not parts:
+            raise ModelProviderError("message content parts are empty")
+        return parts
+
     def _build_body(
         self,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         parameters: dict[str, Any],
     ) -> dict[str, Any]:
         """Build the JSON body for the NVIDIA API."""

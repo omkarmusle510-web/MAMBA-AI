@@ -13,11 +13,27 @@ from memory import InMemoryStore
 from models import DefaultModelRouter, NVIDIAModelProvider
 from skills import create_mixed_task_executor
 
+_DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
+
 
 def create_brain() -> Brain:
     """Compose and wire the Mamba runtime components."""
-    provider = NVIDIAModelProvider()
-    router = DefaultModelRouter([provider])
+    text_provider = NVIDIAModelProvider()
+    providers = [text_provider]
+
+    # Register a multimodal-capable provider when a vision model is configured.
+    # Visual understanding routes by capability="multimodal"; text tasks keep
+    # using the default text provider (first registered).
+    vision_model = os.environ.get("NVIDIA_VISION_MODEL", _DEFAULT_VISION_MODEL).strip()
+    if vision_model:
+        providers.append(
+            NVIDIAModelProvider(
+                model=vision_model,
+                supports_multimodal=True,
+            )
+        )
+
+    router = DefaultModelRouter(providers)
     planning_agent = PlanningAgent(router=router)
     planner = AgentPlanner(handler=planning_agent)
     executor = create_mixed_task_executor(model_router=router)

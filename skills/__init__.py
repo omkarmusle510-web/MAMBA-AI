@@ -47,6 +47,7 @@ from .screen import (
     RegionScreenshotSkill,
     ScreenTaskHandler,
     ScreenshotSkill,
+    VisualUnderstandingSkill,
 )
 from .skill import BaseSkill, Skill, SkillTaskHandler
 from .system import (
@@ -105,6 +106,7 @@ __all__ = [
     "SystemTaskHandler",
     "TerminalSkill",
     "TerminalTaskHandler",
+    "VisualUnderstandingSkill",
     "WriteClipboardSkill",
     "WriteFileSkill",
     "create_analyze_task_executor",
