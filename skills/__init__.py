@@ -61,6 +61,7 @@ from .terminal import (
     create_terminal_task_executor,
 )
 from .types import SkillInput, SkillOutput
+from .web import WebSearchSkill, WebTaskHandler
 
 __all__ = [
     "AnalyzeSkill",
@@ -107,6 +108,8 @@ __all__ = [
     "TerminalSkill",
     "TerminalTaskHandler",
     "VisualUnderstandingSkill",
+    "WebSearchSkill",
+    "WebTaskHandler",
     "WriteClipboardSkill",
     "WriteFileSkill",
     "create_analyze_task_executor",

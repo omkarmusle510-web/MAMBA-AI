@@ -13,6 +13,13 @@ from memory import InMemoryStore
 from models import DefaultModelRouter, NVIDIAModelProvider
 from skills import create_mixed_task_executor
 
+try:
+    import dotenv
+
+    dotenv.load_dotenv()
+except ImportError:
+    pass
+
 _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 

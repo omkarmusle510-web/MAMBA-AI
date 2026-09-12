@@ -37,6 +37,7 @@ from .github import (
 from .screen import ScreenTaskHandler
 from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
+from .web import WebTaskHandler
 
 _FILESYSTEM_INTENTS = frozenset(
     {
@@ -190,6 +191,8 @@ _SCREEN_INTENTS = frozenset(
     }
 )
 
+_WEB_INTENTS = frozenset({"web_search"})
+
 
 def create_mixed_task_executor(
     *,
@@ -211,9 +214,10 @@ def create_mixed_task_executor(
     desktop_handler: TaskHandler | None = None,
     system_handler: TaskHandler | None = None,
     screen_handler: TaskHandler | None = None,
+    web_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, and screen capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, and web capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -267,6 +271,9 @@ def create_mixed_task_executor(
     if screen_handler is None:
         screen_handler = ScreenTaskHandler(model_router=model_router)
 
+    if web_handler is None:
+        web_handler = WebTaskHandler()
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -289,6 +296,9 @@ def create_mixed_task_executor(
 
     for intent in _SCREEN_INTENTS:
         handlers[intent] = screen_handler
+
+    for intent in _WEB_INTENTS:
+        handlers[intent] = web_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)
