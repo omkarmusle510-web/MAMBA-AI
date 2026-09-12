@@ -31,3 +31,9 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime data / local storage
+.mamba/
+data/
+*.db
+*.sqlite3

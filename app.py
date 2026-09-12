@@ -9,7 +9,7 @@ from agents.planner import AgentPlanner
 from agents.planning_agent import PlanningAgent
 from core.brain import Brain
 from core.types import ExecutionResult, ResultStatus
-from memory import InMemoryStore
+from memory import InMemoryStore, MemoryStore, PersistentStore
 from models import DefaultModelRouter, GeminiModelProvider, GroqModelProvider, NVIDIAModelProvider
 from models.errors import ModelProviderError
 from skills import create_mixed_task_executor
@@ -24,7 +24,7 @@ except ImportError:
 _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 
-def create_brain() -> Brain:
+def create_brain(*, memory: MemoryStore | None = None) -> Brain:
     """Compose and wire the Mamba runtime components."""
     providers = []
 
@@ -71,7 +71,8 @@ def create_brain() -> Brain:
     planning_agent = PlanningAgent(router=router)
     planner = AgentPlanner(handler=planning_agent)
     executor = create_mixed_task_executor(model_router=router)
-    memory = InMemoryStore()
+    if memory is None:
+        memory = PersistentStore()
 
     return Brain(
         planner=planner,

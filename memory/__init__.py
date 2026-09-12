@@ -7,6 +7,7 @@ from .errors import (
     MemoryStorageError,
 )
 from .protocols import MemoryStore
+from .persistent import PersistentStore
 from .store import InMemoryStore
 from .types import MemoryEntry, MemoryQuery, MemoryResult
 
@@ -20,4 +21,5 @@ __all__ = [
     "MemoryRetrievalError",
     "MemoryStore",
     "MemoryStorageError",
+    "PersistentStore",
 ]
