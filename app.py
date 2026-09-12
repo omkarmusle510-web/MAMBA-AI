@@ -10,7 +10,8 @@ from agents.planning_agent import PlanningAgent
 from core.brain import Brain
 from core.types import ExecutionResult, ResultStatus
 from memory import InMemoryStore
-from models import DefaultModelRouter, NVIDIAModelProvider
+from models import DefaultModelRouter, GroqModelProvider, NVIDIAModelProvider
+from models.errors import ModelProviderError
 from skills import create_mixed_task_executor
 
 try:
@@ -25,19 +26,39 @@ _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 def create_brain() -> Brain:
     """Compose and wire the Mamba runtime components."""
-    text_provider = NVIDIAModelProvider()
-    providers = [text_provider]
+    providers = []
 
-    # Register a multimodal-capable provider when a vision model is configured.
-    # Visual understanding routes by capability="multimodal"; text tasks keep
-    # using the default text provider (first registered).
-    vision_model = os.environ.get("NVIDIA_VISION_MODEL", _DEFAULT_VISION_MODEL).strip()
-    if vision_model:
-        providers.append(
-            NVIDIAModelProvider(
-                model=vision_model,
-                supports_multimodal=True,
-            )
+    # NVIDIA text provider — optional; skip if credentials are missing.
+    try:
+        text_provider = NVIDIAModelProvider()
+        providers.append(text_provider)
+    except ModelProviderError:
+        pass
+
+    # NVIDIA vision provider — optional; only when text provider exists.
+    if providers:
+        vision_model = os.environ.get("NVIDIA_VISION_MODEL", _DEFAULT_VISION_MODEL).strip()
+        if vision_model:
+            try:
+                providers.append(
+                    NVIDIAModelProvider(
+                        model=vision_model,
+                        supports_multimodal=True,
+                    )
+                )
+            except ModelProviderError:
+                pass
+
+    # Groq text provider — optional; skip if credentials are missing.
+    try:
+        providers.append(GroqModelProvider())
+    except ModelProviderError:
+        pass
+
+    if not providers:
+        raise RuntimeError(
+            "No model providers available. Set NVIDIA_API_KEY or GROQ_API_KEY "
+            "in your environment or .env file."
         )
 
     router = DefaultModelRouter(providers)
