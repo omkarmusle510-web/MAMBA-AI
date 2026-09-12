@@ -115,3 +115,4 @@ def normalize_speech_text(text: str) -> str:
     joined = re.sub(r"([.,!?])\1+", r"\1", joined)
 
     return joined
+

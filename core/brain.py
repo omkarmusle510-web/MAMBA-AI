@@ -182,10 +182,12 @@ class Brain:
             if self._pending_approval is None:
                 context = ExecutionContext.from_request(user_request)
                 context.transition_to(ExecutionState.PLANNING)
-                context.transition_to(ExecutionState.EXECUTING)
                 msg = "There is no pending action requiring approval. Please specify what you would like me to do."
+                plan = ExecutionPlan(steps=(PlanStep(description="Respond to user", intent="respond"),))
+                context.attach_plan(plan)
+                context.transition_to(ExecutionState.EXECUTING)
                 obs = Observation(
-                    step_id="unprompted_approval",
+                    step_id=plan.steps[0].id,
                     content=msg,
                     success=True,
                 )
@@ -207,10 +209,12 @@ class Brain:
                 self._pending_approval = None
                 context = ExecutionContext.from_request(user_request)
                 context.transition_to(ExecutionState.PLANNING)
-                context.transition_to(ExecutionState.EXECUTING)
                 msg = f"Operation '{pending.step.description}' was cancelled."
+                plan = ExecutionPlan(steps=(PlanStep(description=f"Cancel '{pending.step.description}'", intent="cancel"),))
+                context.attach_plan(plan)
+                context.transition_to(ExecutionState.EXECUTING)
                 obs = Observation(
-                    step_id=pending.step.id,
+                    step_id=plan.steps[0].id,
                     content=msg,
                     success=True,
                     metadata={"cancelled": True},
@@ -244,6 +248,19 @@ class Brain:
         return None
 
     # ── Private Implementation ──
+
+    def _record_turn_context(
+        self, user_request: UserRequest, result: ExecutionResult
+    ) -> None:
+        """Cache the most recent turn context to provide context for natural follow-ups."""
+        self._last_turn_context = {
+            "goal": user_request.goal,
+            "status": result.status.value,
+            "output": result.output,
+            "last_observation": (
+                result.observations[-1].content if result.observations else None
+            ),
+        }
 
     def _intake(self, request: str | UserRequest) -> UserRequest | None:
         """Normalize and validate the incoming request."""
@@ -400,8 +417,11 @@ class Brain:
             return None
 
     def _execute_plan(
-        self, context: ExecutionContext, plan: ExecutionPlan,
-    ) -> _StepOutcome:
+        self,
+        context: ExecutionContext,
+        plan: ExecutionPlan,
+        user_request: UserRequest,
+    ) -> str:
         """Execute steps from a plan, evaluating each observation.
 
         A step's own observation can request replanning mid-plan (e.g. a
@@ -413,10 +433,20 @@ class Brain:
         the caller as REPLAN so a new cycle can reason over the results
         just observed.
 
-        Returns the overall outcome: FINISHED, REPLAN, or FAILED.
+        Returns the overall outcome: FINISHED, REPLAN, FAILED, or AWAITING_APPROVAL.
         """
-        for step in plan.steps:
-            outcome = self._execute_step(context, step)
+        for idx, step in enumerate(plan.steps):
+            outcome, info = self._execute_step(context, step)
+            if outcome == _StepOutcome.AWAITING_APPROVAL:
+                self._pending_approval = PendingApproval(
+                    step=step,
+                    context=context,
+                    plan=plan,
+                    step_index=idx,
+                    user_request=user_request,
+                    reason=info,
+                )
+                return _StepOutcome.AWAITING_APPROVAL
             if outcome != _StepOutcome.FINISHED:
                 return outcome
 
@@ -427,16 +457,17 @@ class Brain:
 
     def _execute_step(
         self, context: ExecutionContext, step: PlanStep,
-    ) -> _StepOutcome:
+    ) -> tuple[str, str]:
         """Execute a single step through the full permission → execute → observe → verify pipeline.
 
-        Returns FINISHED to continue to the next step, REPLAN to trigger
-        a new reasoning cycle, or FAILED to halt execution.
+        Returns (outcome, info) where outcome is FINISHED, REPLAN, FAILED, or AWAITING_APPROVAL.
         """
         # ── Permission ──
         if self.permissions is not None:
-            allowed, reason = self._evaluate_permission(step, context)
+            allowed, reason, requires_approval = self._evaluate_permission(step, context)
             if not allowed:
+                if requires_approval:
+                    return _StepOutcome.AWAITING_APPROVAL, reason
                 obs = Observation(
                     step_id=step.id,
                     content=reason,
@@ -445,7 +476,7 @@ class Brain:
                 )
                 context.add_observation(obs)
                 context.mark_failed(reason)
-                return _StepOutcome.FAILED
+                return _StepOutcome.FAILED, reason
 
         # ── Execute ──
         try:
@@ -455,26 +486,26 @@ class Brain:
             obs = Observation(step_id=step.id, content=str(exc), success=False)
             context.add_observation(obs)
             context.mark_failed(str(exc))
-            return _StepOutcome.FAILED
+            return _StepOutcome.FAILED, str(exc)
         except Exception as exc:
             obs = Observation(step_id=step.id, content=str(exc), success=False)
             context.add_observation(obs)
             context.mark_failed(f"execution error: {exc}")
-            return _StepOutcome.FAILED
+            return _StepOutcome.FAILED, str(exc)
 
         # ── Evaluate Observation ──
         if not observation.success:
             # The action failed. Allow re-planning so the agent can adapt/recover, unless explicitly forbidden.
             allow_replan = step.metadata.get("replan_on_failure", True)
             if observation.metadata.get("replan") is True or allow_replan:
-                return _StepOutcome.REPLAN
+                return _StepOutcome.REPLAN, ""
             context.mark_failed(observation.content or "step execution failed")
-            return _StepOutcome.FAILED
+            return _StepOutcome.FAILED, observation.content or "step execution failed"
 
         if observation.metadata.get("replan") is True:
             # Action succeeded but indicates the plan should be reconsidered
             # (e.g. discovered new information that changes the approach).
-            return _StepOutcome.REPLAN
+            return _StepOutcome.REPLAN, ""
 
         # ── Verification ──
         if self.verifier is not None and self._needs_verification(step, observation):
@@ -495,18 +526,21 @@ class Brain:
                         },
                     )
                     context.add_observation(verification_obs)
-                    return _StepOutcome.REPLAN
+                    return _StepOutcome.REPLAN, ""
                 context.mark_failed(reason)
-                return _StepOutcome.FAILED
+                return _StepOutcome.FAILED, reason
 
-        return _StepOutcome.FINISHED
+        return _StepOutcome.FINISHED, ""
 
     def _evaluate_permission(
         self, step: PlanStep, context: ExecutionContext,
-    ) -> tuple[bool, str]:
-        """Evaluate permissions for a plan step."""
+    ) -> tuple[bool, str, bool]:
+        """Evaluate permissions for a plan step.
+
+        Returns (allowed, reason, requires_approval).
+        """
         if self.permissions is None:
-            return True, ""
+            return True, "", False
 
         cap_meta: dict[str, Any] = {}
         if hasattr(self.executor, "get_metadata"):
@@ -553,53 +587,79 @@ class Brain:
         try:
             perm_res = self.permissions.evaluate(perm_req)
         except Exception as exc:
-            return False, f"permission evaluation failed: {exc}"
+            return False, f"permission evaluation failed: {exc}", False
 
         if perm_res.decision == PermissionDecision.DENY:
-            return False, f"permission denied: {perm_res.reason}"
+            return False, f"permission denied: {perm_res.reason}", False
 
         if perm_res.decision == PermissionDecision.ASK:
-            is_destructive = (
-                merged_metadata.get("destructive") is True
-                or "destructive" in perm_res.metadata.get("escalation_flags", [])
+            approved = (
+                step.metadata.get("approved") is True
+                or context.request.metadata.get("approved") is True
             )
-            if is_destructive:
-                approved = (
-                    step.metadata.get("approved") is True
-                    or context.request.metadata.get("approved") is True
-                )
-            else:
-                goal_lower = context.request.goal.lower()
-                step_intent = step.intent.lower()
-                step_action = str(step.metadata.get("action") or "").lower()
-                explicitly_requested = (
-                    step_intent in goal_lower
-                    or step_action in goal_lower
-                    or ("clipboard" in goal_lower and ("clipboard" in step_intent or "clipboard" in step_action))
-                    or ("window" in goal_lower and ("window" in step_intent or "window" in step_action))
-                )
-                approved = (
-                    step.metadata.get("approved") is True
-                    or context.request.metadata.get("approved") is True
-                    or explicitly_requested
-                    or (
-                        ("screen" in goal_lower or "screenshot" in goal_lower)
-                        and (
-                            "screen" in step_intent
-                            or "screenshot" in step_intent
-                            or "ocr" in step_intent
-                            or "visual" in step_intent
-                            or "screen" in step_action
-                            or "screenshot" in step_action
-                            or "ocr" in step_action
-                            or "visual" in step_action
-                        )
-                    )
-                )
             if not approved:
-                return False, f"action requires user approval: {perm_res.reason}"
+                return False, perm_res.reason or f"Action '{step.description}' requires user confirmation", True
 
-        return True, ""
+        return True, "", False
+
+    def _resume_pending_approval(
+        self,
+        pending: PendingApproval,
+        approval_request: UserRequest,
+    ) -> ExecutionResult:
+        """Resume execution of a paused step after user approval."""
+        context = ExecutionContext.from_request(
+            UserRequest(
+                goal=pending.user_request.goal,
+                metadata={**pending.user_request.metadata, "approved": True},
+            )
+        )
+        for obs in pending.context.observations:
+            if obs.metadata.get("awaiting_approval"):
+                continue
+            context.add_observation(obs)
+
+        pending.step.metadata["approved"] = True
+
+        context.transition_to(ExecutionState.PLANNING)
+        context.attach_plan(pending.plan)
+        context.transition_to(ExecutionState.EXECUTING)
+
+        outcome, info = self._execute_step(context, pending.step)
+        if outcome == _StepOutcome.FAILED:
+            return context.record.to_result()
+
+        remaining_steps = pending.plan.steps[pending.step_index + 1:]
+        for rem_step in remaining_steps:
+            outcome, rem_info = self._execute_step(context, rem_step)
+            if outcome == _StepOutcome.AWAITING_APPROVAL:
+                self._pending_approval = PendingApproval(
+                    step=rem_step,
+                    context=context,
+                    plan=pending.plan,
+                    step_index=pending.plan.steps.index(rem_step),
+                    user_request=pending.user_request,
+                    reason=rem_info,
+                )
+                prompt_msg = f"Action requires user confirmation: {rem_info}. Do you want to proceed?"
+                obs = Observation(
+                    step_id=rem_step.id,
+                    content=prompt_msg,
+                    success=False,
+                    metadata={"permission_decision": "ask", "awaiting_approval": True},
+                )
+                context.add_observation(obs)
+                context.mark_failed(prompt_msg)
+                return context.record.to_result(output=prompt_msg)
+            if outcome == _StepOutcome.FAILED:
+                return context.record.to_result()
+
+        if outcome == _StepOutcome.REPLAN or _plan_needs_replanning(pending.plan):
+            return self._execution_loop(context, pending.user_request)
+
+        self._update_memory(context, pending.user_request)
+        context.transition_to(ExecutionState.COMPLETED)
+        return context.record.to_result(output=_last_observation_content(context))
 
     def _needs_verification(
         self, step: PlanStep, observation: Observation,

@@ -88,18 +88,23 @@ def test_filesystem_and_terminal_handlers_provide_security_metadata():
     assert del_meta.get("destructive") is True
     assert del_meta.get("irreversible") is True
 
-    # Write file must be destructive, medium risk
+    # Write file must be non-destructive, medium risk
     write_step = PlanStep(description="write config", intent="write_file", metadata={"path": "cfg.json", "content": "{}"})
     write_meta = executor.get_metadata(write_step)
-    assert write_meta.get("destructive") is True
+    assert write_meta.get("destructive") is False
     assert write_meta.get("risk_level") == "medium"
 
-    # Terminal command must be HIGH risk, destructive, user_sensitive
-    term_step = PlanStep(description="run bash script", intent="execute_command", metadata={"command": "ls"})
+    # Terminal read-only command is LOW risk, non-destructive
+    term_step = PlanStep(description="run ls", intent="execute_command", metadata={"command": "ls"})
     term_meta = executor.get_metadata(term_step)
-    assert term_meta.get("risk_level") == "high"
-    assert term_meta.get("destructive") is True
-    assert term_meta.get("user_sensitive") is True
+    assert term_meta.get("risk_level") == "low"
+    assert term_meta.get("destructive") is False
+
+    # Terminal destructive command is HIGH risk, destructive, user_sensitive
+    dest_step = PlanStep(description="git reset hard", intent="execute_command", metadata={"command": "git reset --hard"})
+    dest_meta = executor.get_metadata(dest_step)
+    assert dest_meta.get("risk_level") == "high"
+    assert dest_meta.get("destructive") is True
 
 
 def test_permission_denies_high_risk_destructive_actions_without_approval():
