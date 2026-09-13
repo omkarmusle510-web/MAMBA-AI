@@ -85,6 +85,62 @@ class TerminalSkill(BaseSkill):
                 },
             )
 
+        # Detect attempt to open a URL via terminal command (e.g. "open https://...", "start www.youtube.com")
+        cmd_args = extracted.get("args") or ()
+        for cand in [executable] + list(cmd_args):
+            cand_str = str(cand).strip().strip("'\"")
+            if cand_str.startswith(("http://", "https://")) or (cand_str.startswith("www.") and "." in cand_str):
+                import webbrowser
+                target_url = cand_str if cand_str.startswith(("http://", "https://")) else f"https://{cand_str}"
+                try:
+                    opened = webbrowser.open(target_url)
+                    return SkillOutput(
+                        content=f"Opened '{target_url}' in default browser.",
+                        success=True,
+                        metadata={
+                            **TERMINAL_TOOL_METADATA,
+                            "action": "open_url",
+                            "url": target_url,
+                            "opened": opened,
+                        },
+                    )
+                except Exception as exc:
+                    return SkillOutput(
+                        content=f"Failed to open URL '{target_url}': {exc}",
+                        success=False,
+                        metadata={
+                            **TERMINAL_TOOL_METADATA,
+                            "action": "open_url",
+                            "url": target_url,
+                            "error": str(exc),
+                        },
+                    )
+
+        # Detect launch command (e.g. "start notepad" or "open calc")
+        if executable.lower() in ("start", "open") and cmd_args:
+            target_app = str(cmd_args[0]).strip()
+            import shutil
+            resolved_bin = shutil.which(target_app)
+            if resolved_bin:
+                import subprocess
+                try:
+                    subprocess.Popen([resolved_bin] + list(cmd_args[1:]))
+                    return SkillOutput(
+                        content=f"Launched application '{target_app}'.",
+                        success=True,
+                        metadata={
+                            **TERMINAL_TOOL_METADATA,
+                            "action": "launch_application",
+                            "executable": resolved_bin,
+                        },
+                    )
+                except Exception as exc:
+                    return SkillOutput(
+                        content=f"Failed to launch '{target_app}': {exc}",
+                        success=False,
+                        metadata={"error": str(exc)},
+                    )
+
         tool_input = ToolInput(
             arguments=extracted,
             metadata=dict(input.task_input.step_metadata),

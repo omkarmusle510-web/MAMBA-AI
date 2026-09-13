@@ -119,6 +119,10 @@ class CloudflareTTSProvider:
                 err_body = exc.read().decode("utf-8", errors="replace")
             except Exception:
                 pass
+            if exc.code == 429:
+                raise TTSError(
+                    self._sanitize(f"Cloudflare TTS HTTP 429 Quota Exceeded: {err_body[:400] if err_body else 'Rate limit / neuron quota reached'}")
+                ) from exc
             raise TTSError(
                 self._sanitize(f"Cloudflare TTS HTTP {exc.code}: {err_body[:400] if err_body else exc.reason}")
             ) from exc

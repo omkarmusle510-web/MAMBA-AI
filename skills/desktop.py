@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import webbrowser
 
 from core.context import ExecutionContext
 from tasks.types import TaskInput, TaskOutput
@@ -47,6 +48,53 @@ _WRITE_CLIPBOARD_INTENTS = frozenset(
 _CLEAR_CLIPBOARD_INTENTS = frozenset(
     {"clear_clipboard", "empty_clipboard", "clipboard_clear"}
 )
+_OPEN_URL_INTENTS = frozenset(
+    {"open_url", "launch_url", "browse", "open_browser"}
+)
+
+
+class OpenURLSkill(BaseSkill):
+    """Skill for safely launching a URL in the user's default browser."""
+
+    def __init__(self) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.OPEN_URL]
+        super().__init__(
+            Skill(
+                name=defn.name,
+                description=defn.description,
+                metadata=defn.to_metadata(),
+            )
+        )
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        meta = input.task_input.step_metadata
+        url = meta.get("url") or meta.get("link") or meta.get("target") or ""
+        if not url and isinstance(meta.get("arguments"), dict):
+            url = meta["arguments"].get("url", "")
+        url_str = str(url).strip()
+        if not url_str:
+            return SkillOutput(
+                content="Missing required argument: 'url'",
+                success=False,
+                metadata={"error": "missing_url"},
+            )
+        if not url_str.startswith(("http://", "https://")):
+            url_str = "https://" + url_str
+
+        try:
+            opened = webbrowser.open(url_str)
+            return SkillOutput(
+                content=f"Opened '{url_str}' in default browser.",
+                success=True,
+                metadata={"url": url_str, "opened": opened},
+            )
+        except Exception as exc:
+            return SkillOutput(
+                content=f"Failed to open URL '{url_str}': {exc}",
+                success=False,
+                metadata={"url": url_str, "error": str(exc)},
+            )
+
 
 
 class GetForegroundWindowSkill(BaseSkill):
@@ -319,6 +367,7 @@ class DesktopTaskHandler:
     read_clipboard_skill: ReadClipboardSkill | None = None
     write_clipboard_skill: WriteClipboardSkill | None = None
     clear_clipboard_skill: ClearClipboardSkill | None = None
+    open_url_skill: OpenURLSkill | None = None
 
     def __post_init__(self) -> None:
         if self.get_foreground_window_skill is None:
@@ -337,6 +386,8 @@ class DesktopTaskHandler:
             self.write_clipboard_skill = WriteClipboardSkill()
         if self.clear_clipboard_skill is None:
             self.clear_clipboard_skill = ClearClipboardSkill()
+        if self.open_url_skill is None:
+            self.open_url_skill = OpenURLSkill()
 
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
         """Return authoritative capability security metadata for this intent."""
@@ -346,6 +397,8 @@ class DesktopTaskHandler:
             or ""
         ).strip().lower()
 
+        if intent in _OPEN_URL_INTENTS:
+            return DESKTOP_OPERATIONS[DesktopAction.OPEN_URL].to_metadata()
         if intent in _CLOSE_WINDOW_INTENTS:
             return DESKTOP_OPERATIONS[DesktopAction.CLOSE_WINDOW].to_metadata()
         if intent in _FOCUS_WINDOW_INTENTS:
@@ -373,6 +426,10 @@ class DesktopTaskHandler:
         ).strip().lower()
 
         skill_input = SkillInput.from_task(task_input, context)
+
+        if intent in _OPEN_URL_INTENTS:
+            assert self.open_url_skill is not None
+            return self.open_url_skill.run(skill_input).to_task_output()
 
         if intent in _FOREGROUND_INTENTS:
             assert self.get_foreground_window_skill is not None

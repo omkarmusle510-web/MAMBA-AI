@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
 from typing import Any
 
@@ -112,6 +113,69 @@ class DefaultVerifier:
 
         # Predicate dictionary support
         if isinstance(expected, dict):
+            if "file_exists" in expected:
+                target_path = Path(str(expected["file_exists"]))
+                if target_path.exists():
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"file '{target_path}' exists on filesystem",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"file '{target_path}' does not exist on filesystem",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            if "file_absent" in expected:
+                target_path = Path(str(expected["file_absent"]))
+                if not target_path.exists():
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"file '{target_path}' is absent from filesystem",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"file '{target_path}' still exists on filesystem",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
+            if "content_matches" in expected:
+                spec = expected["content_matches"]
+                target_path = Path(str(spec.get("path", "")))
+                expected_content = str(spec.get("content", ""))
+                if not target_path.exists():
+                    return VerificationResult(
+                        status=VerificationStatus.FAILED,
+                        reason=f"file '{target_path}' does not exist to verify content",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                try:
+                    actual_content = target_path.read_text(encoding="utf-8", errors="replace")
+                except Exception as exc:
+                    return VerificationResult(
+                        status=VerificationStatus.FAILED,
+                        reason=f"could not read '{target_path}' to verify content: {exc}",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                if actual_content == expected_content:
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"file '{target_path}' content matches expected content",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"file '{target_path}' content does not match expected content",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
             if "contains" in expected:
                 substr = str(expected["contains"]).casefold()
                 if substr in str(actual).casefold():

@@ -20,6 +20,7 @@ class DesktopAction(StrEnum):
     READ_CLIPBOARD = "read_clipboard"
     WRITE_CLIPBOARD = "write_clipboard"
     CLEAR_CLIPBOARD = "clear_clipboard"
+    OPEN_URL = "open_url"
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +111,13 @@ DESKTOP_OPERATIONS: dict[DesktopAction, DesktopOperationDefinition] = {
         description="Clear text content from the system clipboard.",
         risk_level=RiskLevel.MEDIUM,
         destructive=False,
+    ),
+    DesktopAction.OPEN_URL: DesktopOperationDefinition(
+        name=DesktopAction.OPEN_URL.value,
+        description="Safely open a web URL in the default system browser.",
+        risk_level=RiskLevel.LOW,
+        destructive=False,
+        user_sensitive=False,
     ),
 }
 

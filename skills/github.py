@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from core.context import ExecutionContext
 from tasks.executor import TaskExecutor
@@ -71,12 +72,42 @@ def _extract_github_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         if k not in ("arguments", "parameters", "params", "input"):
             args[k] = v
 
-    # Extract owner / repo if formatted as repository="owner/repo" or repo="owner/repo"
-    repo_val = args.get("repo") or args.get("repository")
-    if isinstance(repo_val, str) and "/" in repo_val and "owner" not in args:
+    # 1. Resolve conversational referents like 'this repository' or 'this repo'
+    repo_val = args.get("repo") or args.get("repository") or args.get("url")
+    referent_phrases = {"this repository", "this repo", "the repository", "the repo", "current repository", "current repo"}
+    if isinstance(repo_val, str) and repo_val.strip().lower() in referent_phrases:
+        active_repo = (
+            metadata.get("active_entities", {}).get("repository")
+            or metadata.get("prior_turn", {}).get("active_entities", {}).get("repository")
+            or metadata.get("prior_turn", {}).get("repository")
+        )
+        if active_repo and isinstance(active_repo, str):
+            repo_val = active_repo
+
+    # 2. Check for GitHub URLs
+    url_target = str(args.get("url") or repo_val or "")
+    if "github.com" in url_target.lower():
+        norm_url = url_target.strip()
+        if not norm_url.startswith(("http://", "https://")):
+            norm_url = "https://" + norm_url
+        parsed = urlparse(norm_url)
+        path_clean = parsed.path.strip("/")
+        segments = [s for s in path_clean.split("/") if s]
+
+        # Profile/org URL: e.g. github.com/owner or github.com/owner?tab=repositories
+        if len(segments) == 1 or (len(segments) > 0 and parsed.query and "tab=" in parsed.query):
+            args["is_profile_or_org"] = True
+            args["profile_owner"] = segments[0]
+            args["profile_url"] = norm_url
+        elif len(segments) >= 2:
+            args["owner"] = segments[0]
+            args["repo"] = segments[1].removesuffix(".git")
+
+    # 3. Extract owner / repo if formatted as repository="owner/repo" or repo="owner/repo"
+    elif isinstance(repo_val, str) and "/" in repo_val and "owner" not in args:
         parts = repo_val.strip().split("/", 1)
         args["owner"] = parts[0]
-        args["repo"] = parts[1]
+        args["repo"] = parts[1].removesuffix(".git")
     elif "repo" not in args and "repository" in args:
         args["repo"] = args["repository"]
 
@@ -118,6 +149,19 @@ class GetRepositorySkill(BaseSkill):
             )
 
         args = _extract_github_metadata(input.task_input.step_metadata)
+
+        # Honest profile/organization URL clarification
+        if args.get("is_profile_or_org"):
+            return SkillOutput(
+                content="That GitHub URL points to a profile or organization, not a specific repository. Which repository should I check?",
+                success=True,
+                metadata={
+                    **defn.to_metadata(),
+                    "profile_or_org": True,
+                    "clarification_needed": True,
+                },
+            )
+
         tool_input = ToolInput(arguments=args, metadata=dict(input.task_input.step_metadata))
 
         try:

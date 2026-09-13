@@ -24,14 +24,11 @@ READ_ONLY_GIT_SUBCOMMANDS: frozenset[str] = frozenset(
         "diff",
         "branch",
         "show",
-        "tag",
-        "remote",
         "version",
         "rev-parse",
         "describe",
         "ls-files",
         "help",
-        "config",
     }
 )
 
@@ -144,6 +141,70 @@ def classify_terminal_command(
                 "user_sensitive": True,
                 "irreversible": True,
                 "risk_level": "high",
+            }
+
+        # 5. git config: distinguish read-only inspection from mutating configuration
+        if subcommand == "config":
+            read_flags = {"--get", "--get-all", "--get-regexp", "-l", "--list", "--get-color", "--get-urlmatch"}
+            if any(flag in remaining_args for flag in read_flags) or not remaining_args:
+                return {
+                    "action": "git_config_read",
+                    "destructive": False,
+                    "user_sensitive": False,
+                    "irreversible": False,
+                    "risk_level": "low",
+                }
+            return {
+                "action": "git_config_write",
+                "destructive": False,
+                "user_sensitive": False,
+                "irreversible": False,
+                "risk_level": "medium",
+            }
+
+        # 6. git tag: distinguish tag deletion (high), listing (low), and tag creation (medium)
+        if subcommand == "tag":
+            if any(a in ("-d", "-D", "--delete") or a.startswith("-d") or a.startswith("-D") for a in remaining_args):
+                return {
+                    "action": "git_tag_delete",
+                    "destructive": True,
+                    "user_sensitive": False,
+                    "irreversible": True,
+                    "risk_level": "high",
+                }
+            if not remaining_args or any(a in ("-l", "--list", "-n") for a in remaining_args):
+                return {
+                    "action": "git_tag_list",
+                    "destructive": False,
+                    "user_sensitive": False,
+                    "irreversible": False,
+                    "risk_level": "low",
+                }
+            return {
+                "action": "git_tag_create",
+                "destructive": False,
+                "user_sensitive": False,
+                "irreversible": False,
+                "risk_level": "medium",
+            }
+
+        # 7. git remote: distinguish mutating remote actions from read-only inspections
+        if subcommand == "remote":
+            mutating_remote_actions = {"add", "remove", "rm", "rename", "set-url", "set-head", "set-branches", "prune"}
+            if any(a in mutating_remote_actions for a in remaining_args):
+                return {
+                    "action": "git_remote_modify",
+                    "destructive": False,
+                    "user_sensitive": False,
+                    "irreversible": False,
+                    "risk_level": "medium",
+                }
+            return {
+                "action": "git_remote_view",
+                "destructive": False,
+                "user_sensitive": False,
+                "irreversible": False,
+                "risk_level": "low",
             }
 
         # Read-only git operations

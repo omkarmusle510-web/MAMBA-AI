@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+import re
 from typing import Any
 
 from memory.protocols import MemoryStore
@@ -79,6 +81,7 @@ _APPROVAL_PHRASES: frozenset[str] = frozenset(
         "execute",
         "run it",
         "that's fine",
+        "that is fine",
         "i approve",
         "affirmative",
     }
@@ -97,21 +100,50 @@ _DENIAL_PHRASES: frozenset[str] = frozenset(
         "nevermind",
         "deny",
         "denied",
+        "reject",
         "abort",
         "halt",
         "do not",
     }
 )
 
+_EXTENDED_APPROVAL_PATTERNS = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|ok|okay|approved?|i\s+approve|proceed|confirm(?:ed)?|please\s+do|execute|run\s+it|do\s+it)"
+    r"(?:[,.\s]+(?:please|you\s+can\s+proceed|proceed|do\s+it|run\s+that|do\s+that|go\s+ahead|and\s+do\s+it|and\s+run\s+it))*[.!?,]*$"
+    r"|^(?:go\s+ahead(?:\s+and\s+(?:do|run)\s+it)?|do\s+that|run\s+that|execute\s+that|please\s+proceed|you\s+can\s+proceed|sounds\s+good|that'?s\s+fine|that\s+is\s+fine)[.!?,]*$",
+    re.IGNORECASE,
+)
+
+_EXTENDED_DENIAL_PATTERNS = re.compile(
+    r"^(?:no|nope|nah|cancel|don'?t|stop|never\s*mind|deny|denied|reject|abort|halt|do\s+not)"
+    r"(?:\s+(?:it|that|do\s+it|do\s+that|thanks|please))*[.!?,]*$"
+    r"|^(?:forget\s+it|don'?t\s+do\s+(?:it|that))[.!?,]*$",
+    re.IGNORECASE,
+)
+
+_REPLACEMENT_PATTERN = re.compile(
+    r"^(?:no[,.\s]+)?(?:don'?t(?:\s+do\s+(?:that|it))?|cancel(?:\s+that|\s+it)?|stop)[,.\s]+(?:instead[,.\s]*|rather[,.\s]*|please[,.\s]*)*(?P<replacement>.+)$",
+    re.IGNORECASE,
+)
+
+_FILENAME_REPLACEMENT_PATTERN = re.compile(
+    r"^(?:actually\s+)?(?:make\s+that|change\s+(?:that|it|the\s+file)\s+to)\s+(?P<new_name>[^\s]+)[.!?,]*$",
+    re.IGNORECASE,
+)
+
 
 def _is_approval_phrase(text: str) -> bool:
     clean = text.strip().lower().rstrip(".!?,")
-    return clean in _APPROVAL_PHRASES
+    if clean in _APPROVAL_PHRASES:
+        return True
+    return bool(_EXTENDED_APPROVAL_PATTERNS.match(clean))
 
 
 def _is_denial_phrase(text: str) -> bool:
     clean = text.strip().lower().rstrip(".!?,")
-    return clean in _DENIAL_PHRASES
+    if clean in _DENIAL_PHRASES:
+        return True
+    return bool(_EXTENDED_DENIAL_PATTERNS.match(clean))
 
 
 @dataclass(slots=True)
@@ -148,6 +180,7 @@ class Brain:
     max_cycles: int = _DEFAULT_MAX_CYCLES
     _pending_approval: PendingApproval | None = field(default=None, init=False)
     _last_turn_context: dict[str, Any] | None = field(default=None, init=False)
+    _active_entities: dict[str, str] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         if self.permissions is None:
@@ -156,6 +189,7 @@ class Brain:
             self.verifier = DefaultVerifier()
         self._pending_approval = None
         self._last_turn_context = None
+        self._active_entities = {}
 
     def run(self, request: str | UserRequest) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle."""
@@ -173,11 +207,41 @@ class Brain:
                 else f"expected str or UserRequest, got {type(request).__name__}",
             )
 
-        # ── 1b. Prior Turn Context Propagation ──
+        # ── 1b. Prior Turn Context & Active Entities Propagation ──
         if self._last_turn_context and "prior_turn" not in user_request.metadata:
             user_request.metadata["prior_turn"] = self._last_turn_context
+        if self._active_entities and "active_entities" not in user_request.metadata:
+            user_request.metadata["active_entities"] = dict(self._active_entities)
 
-        # ── 1c. Pending Approval Resolution ──
+        # ── 1c. Correction & Replacement Context ──
+        rep_match = _REPLACEMENT_PATTERN.match(user_request.goal)
+        if rep_match:
+            if self._pending_approval is not None:
+                self._pending_approval = None
+            replacement_goal = rep_match.group("replacement").strip()
+            user_request = replace(user_request, goal=replacement_goal)
+
+        fn_match = _FILENAME_REPLACEMENT_PATTERN.match(user_request.goal)
+        if fn_match:
+            new_name = fn_match.group("new_name").strip()
+            self._active_entities["file"] = new_name
+            if self._pending_approval is not None:
+                pending = self._pending_approval
+                self._pending_approval = None
+                pending.step.metadata["path"] = new_name
+                pending.step.description = re.sub(r'(\b\S+\.[a-zA-Z0-9]+\b)', new_name, pending.step.description)
+                res = self._resume_pending_approval(pending, user_request)
+                self._record_turn_context(user_request, res)
+                return res
+            elif self._last_turn_context:
+                prev_goal = self._last_turn_context.get("goal", "")
+                if prev_goal:
+                    user_request = replace(
+                        user_request,
+                        goal=re.sub(r'(\b\S+\.[a-zA-Z0-9]+\b)', new_name, prev_goal),
+                    )
+
+        # ── 1d. Pending Approval Resolution ──
         if _is_approval_phrase(user_request.goal):
             if self._pending_approval is None:
                 context = ExecutionContext.from_request(user_request)
@@ -229,6 +293,12 @@ class Brain:
         if self._pending_approval is not None:
             self._pending_approval = None
 
+        # ── 1e. Conversational Referent Resolution ──
+        resolved_goal = self._resolve_referents(user_request.goal)
+        if resolved_goal != user_request.goal:
+            user_request = replace(user_request, goal=resolved_goal)
+        user_request.metadata["active_entities"] = dict(self._active_entities)
+
         # ── 2. Context Assembly ──
         context = ExecutionContext.from_request(user_request)
 
@@ -249,10 +319,104 @@ class Brain:
 
     # ── Private Implementation ──
 
+    def _resolve_referents(self, text: str) -> str:
+        """Resolve anaphoric referents ('that file', 'the file', 'this repo', 'the one I just created', 'the folder', 'that command', 'it') against active entities."""
+        resolved = text
+        active_file = self._active_entities.get("file")
+        active_folder = self._active_entities.get("folder")
+        active_repo = self._active_entities.get("repository")
+        active_command = self._active_entities.get("command")
+
+        # 1. Resolve 'this repository', 'this repo', 'the repo'
+        if active_repo:
+            resolved = re.sub(
+                r'\b(?:this|the|current)\s+(?:repository|repo)\b',
+                active_repo,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        # 2. Resolve 'that file', 'the file', 'the previous file', 'this file', 'the one I just created'
+        if active_file:
+            resolved = re.sub(
+                r'\b(?:that|the(?:\s+previous)?|this)\s+file\b',
+                active_file,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+            resolved = re.sub(
+                r'\b(?:the\s+one\s+I\s+just\s+created|the\s+file\s+I\s+just\s+created)\b',
+                active_file,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+            # Resolve trailing 'it' in common actions like 'read it', 'delete it', 'open it'
+            resolved = re.sub(
+                r'\b(read|delete|remove|open|inspect|check|show)\s+it\b',
+                rf'\1 {active_file}',
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        # 3. Resolve 'the folder', 'that folder', 'the directory', 'that directory'
+        if active_folder:
+            resolved = re.sub(
+                r'\b(?:that|the(?:\s+previous)?|this)\s+(?:folder|directory)\b',
+                active_folder,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        # 4. Resolve 'the command you just ran', 'the previous command', 'that command'
+        if active_command:
+            resolved = re.sub(
+                r'\b(?:the\s+command\s+you\s+just\s+ran|the\s+previous\s+command|that\s+command)\b',
+                active_command,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        return resolved
+
     def _record_turn_context(
         self, user_request: UserRequest, result: ExecutionResult
     ) -> None:
-        """Cache the most recent turn context to provide context for natural follow-ups."""
+        """Cache the most recent turn context and active entities for natural follow-ups."""
+        entities = dict(self._active_entities)
+
+        # Extract entities from result observations
+        for obs in result.observations:
+            meta = obs.metadata
+            if meta.get("path"):
+                p = str(meta["path"])
+                is_dir = not ("." in Path(p).name) or Path(p).is_dir() or "dir" in obs.content.lower()
+                entities["folder" if is_dir else "file"] = p
+            if meta.get("repo") or meta.get("repository"):
+                repo_str = meta.get("repo") or meta.get("repository")
+                entities["repository"] = str(repo_str)
+            if meta.get("command"):
+                cmd_val = meta["command"]
+                if isinstance(cmd_val, dict):
+                    exe = cmd_val.get("executable", "")
+                    args = cmd_val.get("args", [])
+                    cmd_str = f"{exe} {' '.join(str(a) for a in args)}".strip()
+                    entities["command"] = cmd_str or str(exe)
+                else:
+                    entities["command"] = str(cmd_val)
+            if meta.get("url"):
+                entities["url"] = str(meta["url"])
+
+        # Also extract from user goal if filename or repo was explicitly mentioned
+        goal_text = user_request.goal
+        file_match = re.search(r'\b([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)\b', goal_text)
+        if file_match and not file_match.group(1).startswith("http"):
+            entities["file"] = file_match.group(1)
+
+        repo_match = re.search(r'github\.com/([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-]+)', goal_text)
+        if repo_match:
+            entities["repository"] = repo_match.group(1).removesuffix(".git")
+
+        self._active_entities = entities
         self._last_turn_context = {
             "goal": user_request.goal,
             "status": result.status.value,
@@ -260,6 +424,7 @@ class Brain:
             "last_observation": (
                 result.observations[-1].content if result.observations else None
             ),
+            "active_entities": dict(entities),
         }
 
     def _intake(self, request: str | UserRequest) -> UserRequest | None:
@@ -614,16 +779,16 @@ class Brain:
                 metadata={**pending.user_request.metadata, "approved": True},
             )
         )
+        context.transition_to(ExecutionState.PLANNING)
+        context.attach_plan(pending.plan)
+        context.transition_to(ExecutionState.EXECUTING)
+
         for obs in pending.context.observations:
             if obs.metadata.get("awaiting_approval"):
                 continue
             context.add_observation(obs)
 
         pending.step.metadata["approved"] = True
-
-        context.transition_to(ExecutionState.PLANNING)
-        context.attach_plan(pending.plan)
-        context.transition_to(ExecutionState.EXECUTING)
 
         outcome, info = self._execute_step(context, pending.step)
         if outcome == _StepOutcome.FAILED:
@@ -682,6 +847,19 @@ class Brain:
             "expected",
             observation.metadata.get("expected", UNAVAILABLE),
         )
+
+        # Measure actual physical outcome when verify is requested without explicit expected
+        if expected is UNAVAILABLE and step.metadata.get("verify") is True:
+            target_path = step.metadata.get("path") or observation.metadata.get("path")
+            intent_lower = step.intent.lower()
+            if intent_lower in ("write_file", "create_file", "create_directory", "create_dir", "mkdir") and target_path:
+                if "content" in step.metadata and intent_lower in ("write_file", "create_file"):
+                    expected = {"content_matches": {"path": str(target_path), "content": str(step.metadata["content"])}}
+                else:
+                    expected = {"file_exists": str(target_path)}
+            elif intent_lower in ("delete", "delete_file", "delete_directory", "remove", "remove_file", "rmdir", "unlink") and target_path:
+                expected = {"file_absent": str(target_path)}
+
         actual = observation.metadata.get("actual", observation.content)
 
         v_req = VerificationRequest(

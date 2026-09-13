@@ -178,6 +178,10 @@ _DESKTOP_INTENTS = frozenset(
         "clear_clipboard",
         "empty_clipboard",
         "clipboard_clear",
+        "open_url",
+        "launch_url",
+        "browse",
+        "open_browser",
     }
 )
 

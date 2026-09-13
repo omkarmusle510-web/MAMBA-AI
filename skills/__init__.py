@@ -13,6 +13,7 @@ from .desktop import (
     FocusWindowSkill,
     GetForegroundWindowSkill,
     GetWindowTitleSkill,
+    OpenURLSkill,
     ReadClipboardSkill,
     WriteClipboardSkill,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "MemorySkill",
     "MemoryTaskHandler",
     "OCRSkill",
+    "OpenURLSkill",
     "ReadFileSkill",
     "ReadClipboardSkill",
     "RegionOCRSkill",

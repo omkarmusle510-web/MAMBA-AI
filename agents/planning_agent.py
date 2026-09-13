@@ -9,6 +9,7 @@ into the existing ExecutionPlan contract.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from core.types import ExecutionPlan, PlanStep
@@ -37,6 +38,7 @@ Rules:
 security or permission fields (risk_level, destructive, approved) in metadata.
   * terminal ("run_command", "execute_command"): {"executable": "python", "args": ["-V"]} or {"command": "python -V"}
   * filesystem: "list_directory" ({"path": "."}), "read_file" ({"path": "..."}), "write_file" ({"path": "...", "content": "..."}), "delete_file" ({"path": "..."})
+  * desktop: "open_url" ({"url": "https://..."})
   * reasoning / response: "analyze" ({}), "respond" ({}), "summarize" ({}), "explain" ({}), "clarify" ({"question": "<clarification question>"})
   * memory: "remember" ({"content": "<text to remember>"}), "recall" ({"query": "<search query>"}), "delete_memory" ({"id": "<id>"})
   * windows: "get_foreground_window" ({}), "get_window_title" ({"hwnd": <int>}), "find_window" ({"query": "<title>"}), "focus_window" ({"query": "..."} or {"hwnd": <int>}), "close_window" ({"query": "..."} or {"hwnd": <int>})
@@ -44,6 +46,8 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * system: "system_info" ({}), "gpu_info" ({})
   * screen: "screenshot" ({}), "region_screenshot" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "ocr" ({}), "region_ocr" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "visual_understanding" ({"question": "<what to understand about the screen>"})
   * web: "web_search" ({"query": "<search query>"})
+- For compound user requests with multiple distinct actions (e.g. 'Open Notepad and create mamba.txt'), generate separate, ordered plan steps for each distinct action.
+- Ensure all quotes and special characters within strings (e.g. in commit messages or file contents) are properly escaped so that the response is strictly valid JSON.
 - Steps must be grounded in the user's request. Do not invent capabilities \
 that do not exist.
 - Do not claim actions have already been performed.
@@ -69,8 +73,19 @@ def _build_user_message(input: AgentInput) -> str:
     goal = ctx.request.goal
     parts = [f"Goal: {goal}"]
 
-    # Include request metadata if present (e.g. retrieved memories).
+    # Include request metadata if present (e.g. retrieved memories, entities, prior turn).
     req_meta = ctx.request.metadata
+    if req_meta.get("active_entities"):
+        ae = req_meta["active_entities"]
+        parts.append(f"Active entities: {ae}")
+
+    if req_meta.get("prior_turn"):
+        pt = req_meta["prior_turn"]
+        prev_goal = pt.get("goal")
+        prev_out = pt.get("output") or pt.get("last_observation")
+        if prev_goal:
+            parts.append(f"Prior turn: user asked '{prev_goal}', result: {prev_out}")
+
     if req_meta.get("retrieved_memories"):
         memories = req_meta["retrieved_memories"]
         parts.append(f"Relevant memory: {'; '.join(str(m) for m in memories[:5])}")
@@ -88,10 +103,7 @@ def _build_user_message(input: AgentInput) -> str:
 
 
 def _parse_plan_json(content: str) -> dict[str, Any]:
-    """Extract and parse the JSON plan from model output.
-
-    Handles the common case where models wrap JSON in markdown fences.
-    """
+    """Extract and parse the JSON plan from model output with resilient cleaning."""
     text = content.strip()
 
     # Strip markdown code fences if the model added them.
@@ -103,22 +115,37 @@ def _parse_plan_json(content: str) -> dict[str, Any]:
             text = text[:-3]
         text = text.strip()
 
+    # Normalize smart/curly quotes
+    text = (
+        text.replace("“", "\"")
+        .replace("”", "\"")
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+
+    # First attempt: direct json.loads
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        # Fallback: extract substring between first '{' and last '}'
+        # Fallback 1: extract outermost '{' and '}'
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end > start:
+            candidate = text[start : end + 1]
             try:
-                parsed = json.loads(text[start : end + 1])
-            except json.JSONDecodeError as exc:
-                raise AgentPlanningError(
-                    f"model returned invalid JSON: {exc}"
-                ) from exc
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                # Fallback 2: remove trailing commas before } or ]
+                cleaned = re.sub(r",\s*([\}\]])", r"\1", candidate)
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError as exc:
+                    raise AgentPlanningError(
+                        f"model returned invalid JSON: {exc}"
+                    ) from exc
         else:
             raise AgentPlanningError(
-                f"model returned invalid JSON: could not locate valid JSON object"
+                "model returned invalid JSON: could not locate valid JSON object"
             )
 
     if not isinstance(parsed, dict):
@@ -262,10 +289,14 @@ class PlanningAgent:
             raw_plan = _parse_plan_json(response.content)
             plan = _validate_and_build_plan(raw_plan)
         except AgentPlanningError as exc:
-            return AgentOutput(
-                success=False,
-                error=str(exc),
-            )
+            repaired_plan = self._attempt_json_repair(response.content)
+            if repaired_plan is not None:
+                plan = repaired_plan
+            else:
+                return AgentOutput(
+                    success=False,
+                    error=str(exc),
+                )
 
         return AgentOutput(
             plan=plan,
@@ -275,4 +306,33 @@ class PlanningAgent:
                 "provider": response.provider,
             },
         )
+
+    def _attempt_json_repair(self, malformed_text: str) -> ExecutionPlan | None:
+        """Attempt a 1-shot compact repair call through the ModelRouter."""
+        repair_instruction = (
+            "You are a JSON repair tool. The input text contains an invalid or malformed JSON plan.\n"
+            "Produce ONLY a strictly valid JSON object matching this schema:\n"
+            "{\"steps\": [{\"description\": \"...\", \"intent\": \"...\", \"metadata\": {}}], \"needs_replanning\": false}\n"
+            "Return ONLY the raw JSON object, without markdown fences or any other text."
+        )
+        repair_request = ModelRequest(
+            input=f"Fix this JSON plan to be valid JSON:\n\n{malformed_text[:2500]}",
+            system_instruction=repair_instruction,
+            parameters={
+                "temperature": 0,
+                "max_tokens": 2048,
+            },
+        )
+        try:
+            if hasattr(self._router, "invoke"):
+                repair_resp = self._router.invoke(repair_request)
+            else:
+                provider = self._router.route(repair_request)
+                repair_resp = provider.invoke(repair_request)
+            if repair_resp.success and repair_resp.content and repair_resp.content.strip():
+                raw = _parse_plan_json(repair_resp.content)
+                return _validate_and_build_plan(raw)
+        except Exception:
+            pass
+        return None
 

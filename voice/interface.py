@@ -37,6 +37,7 @@ class VoiceInterface:
         self._tts = tts or CloudflareTTSProvider()
         self._capture = capture or MicrophoneCapture()
         self._player = player or SpeakerPlayer()
+        self._tts_degraded = False
 
     @property
     def brain(self) -> Brain:
@@ -49,6 +50,10 @@ class VoiceInterface:
     @property
     def tts(self) -> TTSProvider:
         return self._tts
+
+    @property
+    def tts_degraded(self) -> bool:
+        return self._tts_degraded
 
     def process_voice_input(
         self,
@@ -150,6 +155,9 @@ class VoiceInterface:
 
     def _speak(self, text: str) -> None:
         """Synthesize text and play through speaker, absorbing failures."""
+        if self._tts_degraded:
+            return
+
         try:
             # Normalize Markdown formatting into natural, fluent spoken text
             spoken_text = normalize_speech_text(text)
@@ -164,7 +172,15 @@ class VoiceInterface:
             self._player.play(audio)
         except Exception as exc:
             # Audio playback failure must never fail or crash Mamba Core
-            print(f"[Speech Synthesis / Playback Warning: {exc}]", file=sys.stderr)
+            err_msg = str(exc)
+            if "429" in err_msg or "quota" in err_msg.lower() or "neurons" in err_msg.lower():
+                self._tts_degraded = True
+                print(
+                    "\n[Voice TTS Notice: Cloudflare TTS quota reached (HTTP 429). Continuing session in text-only audio mode.]",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[Speech Synthesis / Playback Warning: {exc}]", file=sys.stderr)
 
     def _extract_speech_text(self, result: ExecutionResult) -> str:
         """Extract user-facing text from execution result for speech synthesis."""

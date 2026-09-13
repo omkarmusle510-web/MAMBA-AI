@@ -242,6 +242,24 @@ class WriteFileSkill(BaseSkill):
         self._tool = tool or WriteFileTool(root_dir=root_dir)
         self._executor = executor or StandardToolExecutor()
 
+    def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
+        """Dynamically detect destructive overwrite of existing non-empty file."""
+        path_str = self._resolve_path_arg(task_input.step_metadata)
+        if path_str:
+            try:
+                p = Path(path_str)
+                if p.is_file() and p.stat().st_size > 0:
+                    return {
+                        "action": "write_file",
+                        "destructive": True,
+                        "user_sensitive": True,
+                        "irreversible": True,
+                        "risk_level": "high",
+                    }
+            except Exception:
+                pass
+        return FILESYSTEM_OPERATIONS[FilesystemAction.WRITE_FILE].to_metadata()
+
     def execute(self, input: SkillInput) -> SkillOutput:
         """Execute the write_file capability."""
         intent = (
@@ -590,7 +608,7 @@ class FilesystemTaskHandler:
         if intent in _DELETE_SUPPORTED_INTENTS:
             return FILESYSTEM_OPERATIONS[FilesystemAction.DELETE].to_metadata()
         if intent in _WRITE_FILE_SUPPORTED_INTENTS:
-            return FILESYSTEM_OPERATIONS[FilesystemAction.WRITE_FILE].to_metadata()
+            return self.write_file_skill.get_metadata(task_input)
         if intent in _CREATE_DIR_SUPPORTED_INTENTS:
             return FILESYSTEM_OPERATIONS[FilesystemAction.CREATE_DIRECTORY].to_metadata()
         if intent in _READ_FILE_SUPPORTED_INTENTS:
