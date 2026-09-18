@@ -1,8 +1,5 @@
-# ELYSIA Desktop Control Agent — Python dependencies
 # Install with the Python 3.11 interpreter, e.g.:
-#   "C:\Users\MSI\AppData\Local\Programs\Python\Python311\python.exe" -m pip install -r requirements.txt
-# Then install the Playwright browser once:
-#   "C:\...\Python311\python.exe" -m playwright install chromium
+
 #
 # NOTE: pytesseract also requires the Tesseract OCR engine to be installed
 #       on Windows (https://github.com/UB-Mannheim/tesseract/wiki). OCR tools

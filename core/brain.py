@@ -185,9 +185,11 @@ class Brain:
     model_router: ModelRouter | None = None
     max_cycles: int = _DEFAULT_MAX_CYCLES
     capabilities: CapabilityRegistry | None = None
+    memory_manager: Any = None
     _pending_approval: PendingApproval | None = field(default=None, init=False)
     _last_turn_context: dict[str, Any] | None = field(default=None, init=False)
     _active_entities: dict[str, str] = field(default_factory=dict, init=False)
+    _memory_manager: Any = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.permissions is None:
@@ -199,6 +201,36 @@ class Brain:
         self._pending_approval = None
         self._last_turn_context = None
         self._active_entities = {}
+
+        # Memory Manager initialization
+        if self.memory_manager is not None:
+            self._memory_manager = self.memory_manager
+            if self.memory is None and hasattr(self.memory_manager, "store"):
+                self.memory = self.memory_manager.store
+        elif self.memory is not None:
+            if hasattr(self.memory, "remember") and hasattr(self.memory, "retrieve"):
+                self._memory_manager = self.memory
+                if hasattr(self.memory, "store"):
+                    self.memory = self.memory.store
+            else:
+                try:
+                    from memory.embedding import SentenceTransformerEmbeddingProvider
+                    from memory.manager import MemoryManager
+
+                    self._memory_manager = MemoryManager(
+                        store=self.memory,
+                        embedding_provider=SentenceTransformerEmbeddingProvider(),
+                        model_router=self.model_router,
+                    )
+                except Exception:
+                    self._memory_manager = None
+        else:
+            self._memory_manager = None
+
+    @property
+    def active_memory_manager(self) -> Any:
+        """Return the active MemoryManager instance if configured."""
+        return self._memory_manager
 
     def is_capability_available(self, capability_id: str) -> bool:
         """Check if a capability is available and configured at runtime."""
@@ -529,18 +561,33 @@ class Brain:
 
         Returns True if successful (or no memory configured), False on failure.
         """
-        if self.memory is None:
+        if self.memory is None and self._memory_manager is None:
             return True
         try:
-            query = MemoryQuery(query=user_request.goal)
-            result = self.memory.retrieve(query)
-            if result.entries:
+            project = (
+                user_request.metadata.get("project")
+                or self._active_entities.get("repository")
+                or ""
+            )
+            if self._memory_manager is not None:
+                result = self._memory_manager.retrieve(
+                    query=user_request.goal,
+                    project=str(project),
+                    limit=5,
+                )
+            elif self.memory is not None:
+                query = MemoryQuery(query=user_request.goal)
+                result = self.memory.retrieve(query)
+            else:
+                result = None
+
+            if result and result.entries:
                 context.record.request.metadata["retrieved_memories"] = [
                     entry.content for entry in result.entries
                 ]
-        except Exception as exc:
-            context.mark_failed(f"memory retrieval failed: {exc}")
-            return False
+        except Exception:
+            # Memory retrieval failure must not crash execution
+            pass
         return True
 
     def _execution_loop(
@@ -1016,7 +1063,7 @@ class Brain:
         self, context: ExecutionContext, user_request: UserRequest,
     ) -> None:
         """Store execution outcome in memory. Failures are silently absorbed."""
-        if self.memory is None:
+        if self.memory is None and self._memory_manager is None:
             return
 
         # Conservative: do not persist arbitrary sensitive screen interpretations.
@@ -1028,15 +1075,38 @@ class Brain:
 
         try:
             last_content = _last_observation_content(context)
-            self.memory.store(
-                MemoryEntry(
-                    content=f"Goal: {user_request.goal} -> Outcome: {last_content}",
+            project = (
+                user_request.metadata.get("project")
+                or self._active_entities.get("repository")
+                or ""
+            )
+            content = f"Goal: {user_request.goal} -> Outcome: {last_content}"
+
+            if self._memory_manager is not None:
+                from memory.types import MemoryType
+
+                self._memory_manager.remember(
+                    content=content,
+                    memory_type=MemoryType.TASK_CONTEXT,
+                    project=str(project),
+                    source="execution",
+                    importance=0.4,
                     metadata={
                         "execution_id": context.execution_id,
                         "goal": user_request.goal,
                     },
+                    check_supersede=False,
                 )
-            )
+            elif self.memory is not None:
+                self.memory.store(
+                    MemoryEntry(
+                        content=content,
+                        metadata={
+                            "execution_id": context.execution_id,
+                            "goal": user_request.goal,
+                        },
+                    )
+                )
         except Exception:
             # Memory update failure must not corrupt a successful execution
             pass
@@ -1061,6 +1131,7 @@ def create_brain(
     model_router: ModelRouter | None = None,
     max_cycles: int = _DEFAULT_MAX_CYCLES,
     capabilities: CapabilityRegistry | None = None,
+    memory_manager: Any = None,
 ) -> Brain:
     """Convenience factory to create a Brain instance."""
     return Brain(
@@ -1072,4 +1143,5 @@ def create_brain(
         model_router=model_router,
         max_cycles=max_cycles,
         capabilities=capabilities,
+        memory_manager=memory_manager,
     )

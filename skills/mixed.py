@@ -148,6 +148,10 @@ _MEMORY_INTENTS = frozenset(
         "forget",
         "remove_memory",
         "clear_memory",
+        "update_memory",
+        "modify_memory",
+        "summarize_memories",
+        "summarize_memory",
     }
 )
 
