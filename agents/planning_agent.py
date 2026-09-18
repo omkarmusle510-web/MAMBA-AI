@@ -46,7 +46,10 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * system: "system_info" ({}), "gpu_info" ({})
   * screen: "screenshot" ({}), "region_screenshot" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "ocr" ({}), "region_ocr" ({"x": <int>, "y": <int>, "width": <int>, "height": <int>}), "visual_understanding" ({"question": "<what to understand about the screen>"})
   * web: "web_search" ({"query": "<search query>"})
-- For compound user requests with multiple distinct actions (e.g. 'Open Notepad and create mamba.txt'), generate separate, ordered plan steps for each distinct action.
+  * email: "search_emails" ({"query": "<query>"}), "list_emails" ({"max_results": <int>}), "read_email" ({"email_id": "<id>"}), "summarize_email" ({"email_id": "<id>"}), "draft_email" ({"to": "<recipient>", "subject": "...", "body": "..."}), "send_email" ({"to": "<recipient>", "subject": "...", "body": "..."}), "reply_email" ({"email_id": "<id>", "body": "..."})
+  * calendar: "list_events" ({"start_time": "<iso>", "end_time": "<iso>"}), "search_events" ({"query": "<query>"}), "get_event" ({"event_id": "<id>"}), "check_conflicts" ({"start_time": "<iso>", "end_time": "<iso>"}), "create_event" ({"title": "...", "start_time": "<iso>", "end_time": "<iso>", "description": "...", "location": "..."}), "modify_event" ({"event_id": "<id>", ...}), "cancel_event" ({"event_id": "<id>"})
+  * messaging: "list_conversations" ({}), "search_conversations" ({"query": "<contact name>"}), "read_messages" ({"conversation_id": "<id or contact name>"}), "draft_message" ({"recipient": "<name>", "content": "..."}), "send_message" ({"recipient": "<name>", "content": "..."}), "reply_message" ({"conversation_id": "<id>", "content": "..."})
+- For compound user requests with multiple distinct actions (e.g. 'Open Notepad and create mamba.txt' or 'Find the email from Rahul, check calendar, and message him'), generate separate, ordered plan steps for each distinct action.
 - Ensure all quotes and special characters within strings (e.g. in commit messages or file contents) are properly escaped so that the response is strictly valid JSON.
 - Steps must be grounded in the user's request. Do not invent capabilities \
 that do not exist.

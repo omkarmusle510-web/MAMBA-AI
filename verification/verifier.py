@@ -176,6 +176,27 @@ class DefaultVerifier:
                     evidence=evidence,
                     metadata=metadata,
                 )
+            if "provider_verified" in expected:
+                target_field = expected.get("provider_verified")
+                is_dict = isinstance(actual, dict)
+                dict_src = actual if is_dict else (metadata.get("result") if isinstance(metadata.get("result"), dict) else {})
+                verified_flag = dict_src.get("verified") is True or metadata.get("verified") is True
+                status_val = str(dict_src.get("status", metadata.get("status", ""))).lower()
+                expected_status = str(target_field).lower() if isinstance(target_field, str) and target_field.lower() not in ("true", "1") else None
+
+                if verified_flag or (expected_status and status_val == expected_status):
+                    return VerificationResult(
+                        status=VerificationStatus.VERIFIED,
+                        reason=f"provider confirmed outcome with status '{status_val or 'verified'}'",
+                        evidence=evidence,
+                        metadata=metadata,
+                    )
+                return VerificationResult(
+                    status=VerificationStatus.FAILED,
+                    reason=f"provider confirmation failed: status is '{status_val}', verified is {verified_flag}",
+                    evidence=evidence,
+                    metadata=metadata,
+                )
             if "contains" in expected:
                 substr = str(expected["contains"]).casefold()
                 if substr in str(actual).casefold():

@@ -17,7 +17,10 @@ from .desktop import (
     ReadClipboardSkill,
     WriteClipboardSkill,
 )
+from .calendar import CalendarSkill, CalendarTaskHandler
+from .email import EmailSkill, EmailTaskHandler
 from .errors import SkillError, SkillExecutionError
+from .messaging import MessagingSkill, MessagingTaskHandler
 from .filesystem import (
     CreateDirectorySkill,
     DeleteSkill,
@@ -73,11 +76,15 @@ __all__ = [
     "AnalyzeSkill",
     "AnalyzeTaskHandler",
     "BaseSkill",
+    "CalendarSkill",
+    "CalendarTaskHandler",
     "ClearClipboardSkill",
     "CloseWindowSkill",
     "CreateDirectorySkill",
     "DeleteSkill",
     "DesktopTaskHandler",
+    "EmailSkill",
+    "EmailTaskHandler",
     "FilesystemSkill",
     "FilesystemTaskHandler",
     "FindWindowSkill",
@@ -96,6 +103,8 @@ __all__ = [
     "ListPullRequestsSkill",
     "MemorySkill",
     "MemoryTaskHandler",
+    "MessagingSkill",
+    "MessagingTaskHandler",
     "OCRSkill",
     "OpenURLSkill",
     "ReadFileSkill",

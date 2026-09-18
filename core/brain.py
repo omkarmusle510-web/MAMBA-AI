@@ -108,9 +108,9 @@ _DENIAL_PHRASES: frozenset[str] = frozenset(
 )
 
 _EXTENDED_APPROVAL_PATTERNS = re.compile(
-    r"^(?:yes|yeah|yep|yup|sure|ok|okay|approved?|i\s+approve|proceed|confirm(?:ed)?|please\s+do|execute|run\s+it|do\s+it)"
-    r"(?:[,.\s]+(?:please|you\s+can\s+proceed|proceed|do\s+it|run\s+that|do\s+that|go\s+ahead|and\s+do\s+it|and\s+run\s+it))*[.!?,]*$"
-    r"|^(?:go\s+ahead(?:\s+and\s+(?:do|run)\s+it)?|do\s+that|run\s+that|execute\s+that|please\s+proceed|you\s+can\s+proceed|sounds\s+good|that'?s\s+fine|that\s+is\s+fine)[.!?,]*$",
+    r"^(?:yes|yeah|yep|yup|sure|ok|okay|approved?|i\s+approve|proceed|confirm(?:ed)?|please\s+do|execute|run\s+it|do\s+it|send\s+it)"
+    r"(?:[,.\s]+(?:please|you\s+can\s+proceed|proceed|do\s+it|run\s+that|do\s+that|go\s+ahead|and\s+do\s+it|and\s+run\s+it|send\s+it|send\s+the\s+email|send\s+the\s+message|send\s+this|create\s+it|update\s+it))*[.!?,]*$"
+    r"|^(?:go\s+ahead(?:\s+and\s+(?:do|run|send|create)\s+it)?|do\s+that|run\s+that|execute\s+that|send\s+it|send\s+the\s+email|send\s+the\s+message|please\s+send\s+it|please\s+proceed|you\s+can\s+proceed|sounds\s+good|that'?s\s+fine|that\s+is\s+fine)[.!?,]*$",
     re.IGNORECASE,
 )
 
@@ -376,6 +376,42 @@ class Brain:
                 flags=re.IGNORECASE,
             )
 
+        # 5. Resolve 'that email', 'the email', 'the latest email', 'the previous email'
+        active_email = self._active_entities.get("email")
+        if active_email:
+            resolved = re.sub(
+                r'\b(?:that|the(?:\s+latest|\s+previous)?|this)\s+email\b',
+                active_email,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        # 6. Resolve 'that meeting', 'the meeting', 'the meeting tomorrow', 'that event'
+        active_meeting = self._active_entities.get("meeting")
+        if active_meeting:
+            resolved = re.sub(
+                r'\b(?:that|the(?:\s+previous)?|this)\s+(?:meeting|event)(?:\s+tomorrow)?\b',
+                active_meeting,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
+        # 7. Resolve 'that conversation', 'the conversation', 'the message I just mentioned'
+        active_conv = self._active_entities.get("conversation")
+        if active_conv:
+            resolved = re.sub(
+                r'\b(?:that|the(?:\s+previous)?|this)\s+conversation\b',
+                active_conv,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+            resolved = re.sub(
+                r'\bthe\s+message\s+I\s+just\s+mentioned\b',
+                active_conv,
+                resolved,
+                flags=re.IGNORECASE,
+            )
+
         return resolved
 
     def _record_turn_context(
@@ -405,6 +441,33 @@ class Brain:
                     entities["command"] = str(cmd_val)
             if meta.get("url"):
                 entities["url"] = str(meta["url"])
+
+            # Email entity extraction
+            if meta.get("email_id"):
+                entities["email"] = str(meta["email_id"])
+            elif meta.get("subject"):
+                entities["email"] = str(meta["subject"])
+            elif isinstance(meta.get("result"), dict) and meta["result"].get("emails"):
+                first_email = meta["result"]["emails"][0]
+                entities["email"] = str(first_email.get("id") or first_email.get("subject"))
+
+            # Calendar event/meeting entity extraction
+            if meta.get("event_id"):
+                entities["meeting"] = str(meta["event_id"])
+            elif meta.get("title") and any(k in meta.get("action", "") for k in ("event", "calendar", "meeting")):
+                entities["meeting"] = str(meta["title"])
+            elif isinstance(meta.get("result"), dict) and meta["result"].get("events"):
+                first_event = meta["result"]["events"][0]
+                entities["meeting"] = str(first_event.get("id") or first_event.get("title"))
+
+            # Messaging conversation entity extraction
+            if meta.get("conversation_id"):
+                entities["conversation"] = str(meta["conversation_id"])
+            elif meta.get("recipient"):
+                entities["conversation"] = str(meta["recipient"])
+            elif isinstance(meta.get("result"), dict) and meta["result"].get("conversations"):
+                first_conv = meta["result"]["conversations"][0]
+                entities["conversation"] = str(first_conv.get("id") or first_conv.get("name"))
 
         # Also extract from user goal if filename or repo was explicitly mentioned
         goal_text = user_request.goal
@@ -830,6 +893,17 @@ class Brain:
         self, step: PlanStep, observation: Observation,
     ) -> bool:
         """Determine whether verification is applicable for a step."""
+        intent_lower = step.intent.lower()
+        if intent_lower in (
+            "send_email",
+            "reply_email",
+            "create_event",
+            "modify_event",
+            "cancel_event",
+            "send_message",
+            "reply_message",
+        ):
+            return True
         return (
             "expected" in step.metadata
             or step.metadata.get("verify") is True
@@ -848,24 +922,36 @@ class Brain:
             observation.metadata.get("expected", UNAVAILABLE),
         )
 
+        intent_lower = step.intent.lower()
         # Measure actual physical outcome when verify is requested without explicit expected
-        if expected is UNAVAILABLE and step.metadata.get("verify") is True:
-            target_path = step.metadata.get("path") or observation.metadata.get("path")
-            intent_lower = step.intent.lower()
-            if intent_lower in ("write_file", "create_file", "create_directory", "create_dir", "mkdir") and target_path:
-                if "content" in step.metadata and intent_lower in ("write_file", "create_file"):
-                    expected = {"content_matches": {"path": str(target_path), "content": str(step.metadata["content"])}}
-                else:
-                    expected = {"file_exists": str(target_path)}
-            elif intent_lower in ("delete", "delete_file", "delete_directory", "remove", "remove_file", "rmdir", "unlink") and target_path:
-                expected = {"file_absent": str(target_path)}
+        if expected is UNAVAILABLE:
+            if step.metadata.get("verify") is True:
+                target_path = step.metadata.get("path") or observation.metadata.get("path")
+                if intent_lower in ("write_file", "create_file", "create_directory", "create_dir", "mkdir") and target_path:
+                    if "content" in step.metadata and intent_lower in ("write_file", "create_file"):
+                        expected = {"content_matches": {"path": str(target_path), "content": str(step.metadata["content"])}}
+                    else:
+                        expected = {"file_exists": str(target_path)}
+                elif intent_lower in ("delete", "delete_file", "delete_directory", "remove", "remove_file", "rmdir", "unlink") and target_path:
+                    expected = {"file_absent": str(target_path)}
+            if intent_lower in (
+                "send_email",
+                "reply_email",
+                "create_event",
+                "modify_event",
+                "cancel_event",
+                "send_message",
+                "reply_message",
+            ):
+                expected = {"provider_verified": True}
 
-        actual = observation.metadata.get("actual", observation.content)
+        actual = observation.metadata.get("result", observation.metadata.get("actual", observation.content))
 
+        v_meta = {**dict(step.metadata), **dict(observation.metadata)}
         v_req = VerificationRequest(
             expected=expected,
             actual=actual,
-            metadata=dict(step.metadata),
+            metadata=v_meta,
         )
 
         try:

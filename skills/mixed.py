@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from memory.protocols import MemoryStore
+from memory.store import InMemoryStore
 from models.protocols import ModelRouter
 from tasks.executor import TaskExecutor
 from tasks.protocols import TaskHandler
@@ -15,7 +16,9 @@ from tools.protocols import ToolExecutor
 from tools.tool import BaseTool
 
 from .analyze import AnalyzeSkill, AnalyzeTaskHandler
+from .calendar import CalendarTaskHandler
 from .desktop import DesktopTaskHandler
+from .email import EmailTaskHandler
 from .filesystem import (
     CreateDirectorySkill,
     DeleteSkill,
@@ -36,6 +39,7 @@ from .github import (
     SearchCodeSkill,
 )
 from .memory import MemorySkill, MemoryTaskHandler
+from .messaging import MessagingTaskHandler
 from .screen import ScreenTaskHandler
 from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
@@ -230,6 +234,62 @@ _SCREEN_INTENTS = frozenset(
 
 _WEB_INTENTS = frozenset({"web_search"})
 
+_EMAIL_INTENTS = frozenset(
+    {
+        "search_emails",
+        "search_email",
+        "list_emails",
+        "list_email",
+        "read_email",
+        "get_email",
+        "summarize_email",
+        "draft_email",
+        "create_draft",
+        "send_email",
+        "reply_email",
+        "reply",
+        "email",
+    }
+)
+
+_CALENDAR_INTENTS = frozenset(
+    {
+        "list_events",
+        "list_calendar",
+        "search_events",
+        "search_calendar",
+        "get_event",
+        "calendar_event",
+        "create_event",
+        "schedule_event",
+        "schedule_meeting",
+        "modify_event",
+        "reschedule_event",
+        "reschedule_meeting",
+        "cancel_event",
+        "cancel_meeting",
+        "delete_event",
+        "check_conflicts",
+        "calendar",
+    }
+)
+
+_MESSAGING_INTENTS = frozenset(
+    {
+        "list_conversations",
+        "list_messages",
+        "search_conversations",
+        "search_messages",
+        "read_messages",
+        "read_message",
+        "draft_message",
+        "send_message",
+        "reply_message",
+        "message",
+        "chat",
+    }
+)
+
 
 def create_mixed_task_executor(
     *,
@@ -254,9 +314,12 @@ def create_mixed_task_executor(
     web_handler: TaskHandler | None = None,
     memory_store: MemoryStore | None = None,
     memory_handler: TaskHandler | None = None,
+    email_handler: TaskHandler | None = None,
+    calendar_handler: TaskHandler | None = None,
+    messaging_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, web, and memory capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, web, memory, email, calendar, and messaging capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -319,6 +382,15 @@ def create_mixed_task_executor(
         store = memory_store or InMemoryStore()
         memory_handler = MemoryTaskHandler(memory_skill=MemorySkill(store=store))
 
+    if email_handler is None:
+        email_handler = EmailTaskHandler()
+
+    if calendar_handler is None:
+        calendar_handler = CalendarTaskHandler()
+
+    if messaging_handler is None:
+        messaging_handler = MessagingTaskHandler()
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -348,6 +420,15 @@ def create_mixed_task_executor(
     if memory_handler is not None:
         for intent in _MEMORY_INTENTS:
             handlers[intent] = memory_handler
+
+    for intent in _EMAIL_INTENTS:
+        handlers[intent] = email_handler
+
+    for intent in _CALENDAR_INTENTS:
+        handlers[intent] = calendar_handler
+
+    for intent in _MESSAGING_INTENTS:
+        handlers[intent] = messaging_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)
