@@ -85,9 +85,26 @@ class MessagingSkill(BaseSkill):
 
         try:
             tool_output = self._executor.execute(self._tool, tool_input)
+            if not tool_output.success:
+                err = tool_output.error or "Messaging operation failed"
+                return SkillOutput(
+                    content=str(tool_output.metadata.get("formatted") or err),
+                    success=False,
+                    metadata={
+                        **tool_output.metadata,
+                        "action": action.value,
+                        "result": tool_output.result,
+                        "error": err,
+                    },
+                )
+            content_str = str(
+                tool_output.metadata.get("formatted")
+                or tool_output.result
+                or ""
+            )
             return SkillOutput(
-                content=str(tool_output.content or tool_output.result or tool_output.error or ""),
-                success=tool_output.success,
+                content=content_str,
+                success=True,
                 metadata={
                     **tool_output.metadata,
                     "action": action.value,

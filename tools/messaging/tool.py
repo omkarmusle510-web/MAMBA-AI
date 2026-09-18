@@ -19,7 +19,7 @@ class MessagingHandler(ToolHandler):
     def __init__(self, provider: MessagingProvider | None = None) -> None:
         self._provider = provider or SimulatedMessagingProvider()
 
-    def execute(self, input: ToolInput) -> ToolOutput:
+    def run(self, input: ToolInput) -> ToolOutput:
         args = input.arguments
         action_name = str(args.get("action") or input.metadata.get("action") or "").strip().lower()
 
@@ -40,8 +40,11 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"conversations": dict_convs, "count": len(convs)},
-                    content=text_content,
-                    metadata={"action": MessagingAction.LIST_CONVERSATIONS.value, "count": len(convs)},
+                    metadata={
+                        "action": MessagingAction.LIST_CONVERSATIONS.value,
+                        "count": len(convs),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (MessagingAction.SEARCH_CONVERSATIONS.value, "search"):
@@ -61,8 +64,11 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"conversations": dict_convs, "count": len(convs)},
-                    content=text_content,
-                    metadata={"action": MessagingAction.SEARCH_CONVERSATIONS.value, "count": len(convs)},
+                    metadata={
+                        "action": MessagingAction.SEARCH_CONVERSATIONS.value,
+                        "count": len(convs),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (MessagingAction.READ_MESSAGES.value, "read"):
@@ -82,8 +88,11 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"messages": dict_msgs, "count": len(messages)},
-                    content=text_content,
-                    metadata={"action": MessagingAction.READ_MESSAGES.value, "conversation_id": conv_id},
+                    metadata={
+                        "action": MessagingAction.READ_MESSAGES.value,
+                        "conversation_id": conv_id,
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (MessagingAction.DRAFT_MESSAGE.value, "draft"):
@@ -100,8 +109,11 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=draft.to_dict(),
-                    content=formatted,
-                    metadata={"action": MessagingAction.DRAFT_MESSAGE.value, "draft_id": draft.draft_id},
+                    metadata={
+                        "action": MessagingAction.DRAFT_MESSAGE.value,
+                        "draft_id": draft.draft_id,
+                        "formatted": formatted,
+                    },
                 )
 
             elif action_name in (MessagingAction.SEND_MESSAGE.value, "send"):
@@ -118,7 +130,6 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=receipt.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": MessagingAction.SEND_MESSAGE.value,
                         "message_id": receipt.message_id,
@@ -126,6 +137,7 @@ class MessagingHandler(ToolHandler):
                         "recipient": receipt.recipient,
                         "status": "sent",
                         "verified": True,
+                        "formatted": formatted,
                     },
                 )
 
@@ -143,7 +155,6 @@ class MessagingHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=receipt.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": MessagingAction.REPLY_MESSAGE.value,
                         "message_id": receipt.message_id,
@@ -151,6 +162,7 @@ class MessagingHandler(ToolHandler):
                         "recipient": receipt.recipient,
                         "status": "sent",
                         "verified": True,
+                        "formatted": formatted,
                     },
                 )
 
@@ -161,16 +173,24 @@ class MessagingHandler(ToolHandler):
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Messaging operation failed: {exc}",
-                metadata={"action": action_name, "error": type(exc).__name__},
+                metadata={
+                    "action": action_name,
+                    "error": type(exc).__name__,
+                    "formatted": f"Messaging operation failed: {exc}",
+                },
             )
         except Exception as exc:
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Messaging operation failed: {exc}",
-                metadata={"action": action_name, "error": "unexpected_error"},
+                metadata={
+                    "action": action_name,
+                    "error": "unexpected_error",
+                    "formatted": f"Messaging operation failed: {exc}",
+                },
             )
+
+    execute = run
 
 
 class MessagingTool(BaseTool):

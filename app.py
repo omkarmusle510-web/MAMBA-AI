@@ -7,6 +7,7 @@ import sys
 
 from agents.planner import AgentPlanner
 from agents.planning_agent import PlanningAgent
+from core import CapabilityRegistry, default_capability_registry
 from core.brain import Brain
 from core.types import ExecutionResult, ResultStatus
 from memory import InMemoryStore, MemoryStore, PersistentStore
@@ -24,7 +25,11 @@ except ImportError:
 _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 
-def create_brain(*, memory: MemoryStore | None = None) -> Brain:
+def create_brain(
+    *,
+    memory: MemoryStore | None = None,
+    capabilities: CapabilityRegistry | None = None,
+) -> Brain:
     """Compose and wire the Mamba runtime components."""
     providers = []
 
@@ -67,8 +72,11 @@ def create_brain(*, memory: MemoryStore | None = None) -> Brain:
             "or GEMINI_API_KEY in your environment or .env file."
         )
 
+    if capabilities is None:
+        capabilities = default_capability_registry()
+
     router = DefaultModelRouter(providers)
-    planning_agent = PlanningAgent(router=router)
+    planning_agent = PlanningAgent(router=router, capabilities=capabilities)
     planner = AgentPlanner(handler=planning_agent)
     if memory is None:
         memory = PersistentStore()
@@ -79,6 +87,7 @@ def create_brain(*, memory: MemoryStore | None = None) -> Brain:
         executor=executor,
         memory=memory,
         model_router=router,
+        capabilities=capabilities,
     )
 
 

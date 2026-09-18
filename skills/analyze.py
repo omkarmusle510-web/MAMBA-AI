@@ -47,6 +47,9 @@ _ANALYZE_SUPPORTED_INTENTS = frozenset(
 
 _DEFAULT_SYSTEM_INSTRUCTION = (
     "You are Mamba's analytical reasoning and synthesis component. "
+    "Mamba is a personal AI operating layer between the user and digital tools, with direct desktop, "
+    "terminal, filesystem, browser/web, and operating system capabilities. "
+    "Never claim to be a generic text-only AI or chatbot unable to interact with digital tools or the operating system. "
     "Analyze the given task, context, and data, perform any required reasoning, calculation, "
     "or analysis, and provide a clear, accurate, concise, and direct response."
 )
@@ -68,6 +71,14 @@ def _build_analyze_prompt(input: SkillInput) -> str:
     if goal:
         parts.append(f"Goal: {goal}")
 
+    # Include runtime capability context if present
+    if context and context.request and context.request.metadata:
+        req_meta = context.request.metadata
+        if req_meta.get("capability_context"):
+            parts.append(f"Mamba Runtime Capability Context:\n{req_meta['capability_context']}")
+        elif req_meta.get("capabilities"):
+            parts.append(f"Available Capabilities:\n{req_meta['capabilities']}")
+
     # Specific intent directives
     if intent in {"clarify", "clarification"}:
         parts.append(
@@ -83,6 +94,18 @@ def _build_analyze_prompt(input: SkillInput) -> str:
         parts.append("Task: Provide a direct, coherent final response to the user's goal based on the execution findings.")
     elif task_input.description:
         parts.append(f"Task: {task_input.description}")
+
+    # Detect response formatting constraints from user goal or task description
+    combined_text = f"{goal} {task_input.description}".lower()
+    formatting_constraints: list[str] = []
+    if "bullet point" in combined_text or "bullet" in combined_text:
+        formatting_constraints.append("- Present your response using clean bullet points.")
+    if "short answer" in combined_text or "briefly" in combined_text or "keep it short" in combined_text or "concise" in combined_text:
+        formatting_constraints.append("- Keep the answer concise and direct; avoid unnecessary filler.")
+    if "one sentence" in combined_text or "single sentence" in combined_text:
+        formatting_constraints.append("- Deliver the response in a single sentence.")
+    if formatting_constraints:
+        parts.append("Formatting Constraints:\n" + "\n".join(formatting_constraints))
 
     # Include step metadata if meaningful
     meta = dict(task_input.step_metadata)

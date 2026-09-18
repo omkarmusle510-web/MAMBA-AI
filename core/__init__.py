@@ -1,6 +1,12 @@
 """Mamba Core layer foundation."""
 
 from .brain import Brain, create_brain
+from .capabilities import (
+    CapabilityDescriptor,
+    CapabilityRegistry,
+    CapabilityStatus,
+    default_capability_registry,
+)
 from .context import ExecutionContext
 from .errors import (
     CoreError,
@@ -24,6 +30,9 @@ from .types import (
 
 __all__ = [
     "Brain",
+    "CapabilityDescriptor",
+    "CapabilityRegistry",
+    "CapabilityStatus",
     "CoreError",
     "ExecutionContext",
     "ExecutionError",
@@ -43,4 +52,5 @@ __all__ = [
     "UserRequest",
     "ValidationError",
     "create_brain",
+    "default_capability_registry",
 ]

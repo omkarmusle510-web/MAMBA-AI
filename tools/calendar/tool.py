@@ -19,7 +19,7 @@ class CalendarHandler(ToolHandler):
     def __init__(self, provider: CalendarProvider | None = None) -> None:
         self._provider = provider or SimulatedCalendarProvider()
 
-    def execute(self, input: ToolInput) -> ToolOutput:
+    def run(self, input: ToolInput) -> ToolOutput:
         args = input.arguments
         action_name = str(args.get("action") or input.metadata.get("action") or "").strip().lower()
 
@@ -46,8 +46,11 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"events": dict_events, "count": len(events)},
-                    content=text_content,
-                    metadata={"action": CalendarAction.LIST_EVENTS.value, "count": len(events)},
+                    metadata={
+                        "action": CalendarAction.LIST_EVENTS.value,
+                        "count": len(events),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (CalendarAction.SEARCH_EVENTS.value, "search"):
@@ -67,8 +70,11 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"events": dict_events, "count": len(events)},
-                    content=text_content,
-                    metadata={"action": CalendarAction.SEARCH_EVENTS.value, "count": len(events)},
+                    metadata={
+                        "action": CalendarAction.SEARCH_EVENTS.value,
+                        "count": len(events),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (CalendarAction.GET_EVENT.value, "get"):
@@ -86,8 +92,12 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=ev.to_dict(),
-                    content=formatted,
-                    metadata={"action": CalendarAction.GET_EVENT.value, "event_id": ev.id, "title": ev.title},
+                    metadata={
+                        "action": CalendarAction.GET_EVENT.value,
+                        "event_id": ev.id,
+                        "title": ev.title,
+                        "formatted": formatted,
+                    },
                 )
 
             elif action_name in (CalendarAction.CHECK_CONFLICTS.value, "conflicts"):
@@ -111,8 +121,11 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"conflicts": [e.to_dict() for e in conflicts], "has_conflicts": len(conflicts) > 0},
-                    content=text_content,
-                    metadata={"action": CalendarAction.CHECK_CONFLICTS.value, "has_conflicts": len(conflicts) > 0},
+                    metadata={
+                        "action": CalendarAction.CHECK_CONFLICTS.value,
+                        "has_conflicts": len(conflicts) > 0,
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (CalendarAction.CREATE_EVENT.value, "create"):
@@ -142,13 +155,13 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=ev.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": CalendarAction.CREATE_EVENT.value,
                         "event_id": ev.id,
                         "title": ev.title,
                         "verified": True,
                         "status": "created",
+                        "formatted": formatted,
                     },
                 )
 
@@ -183,13 +196,13 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=ev.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": CalendarAction.MODIFY_EVENT.value,
                         "event_id": ev.id,
                         "title": ev.title,
                         "verified": True,
                         "status": "modified",
+                        "formatted": formatted,
                     },
                 )
 
@@ -203,13 +216,13 @@ class CalendarHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=receipt.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": CalendarAction.CANCEL_EVENT.value,
                         "event_id": receipt.event_id,
                         "title": receipt.title,
                         "verified": True,
                         "status": "cancelled",
+                        "formatted": formatted,
                     },
                 )
 
@@ -220,16 +233,24 @@ class CalendarHandler(ToolHandler):
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Calendar operation failed: {exc}",
-                metadata={"action": action_name, "error": type(exc).__name__},
+                metadata={
+                    "action": action_name,
+                    "error": type(exc).__name__,
+                    "formatted": f"Calendar operation failed: {exc}",
+                },
             )
         except Exception as exc:
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Calendar operation failed: {exc}",
-                metadata={"action": action_name, "error": "unexpected_error"},
+                metadata={
+                    "action": action_name,
+                    "error": "unexpected_error",
+                    "formatted": f"Calendar operation failed: {exc}",
+                },
             )
+
+    execute = run
 
 
 class CalendarTool(BaseTool):

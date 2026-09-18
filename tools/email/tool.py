@@ -20,7 +20,7 @@ class EmailHandler(ToolHandler):
     def __init__(self, provider: EmailProvider | None = None) -> None:
         self._provider = provider or SimulatedEmailProvider()
 
-    def execute(self, input: ToolInput) -> ToolOutput:
+    def run(self, input: ToolInput) -> ToolOutput:
         args = input.arguments
         action_name = str(args.get("action") or input.metadata.get("action") or "").strip().lower()
 
@@ -42,8 +42,11 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"emails": dict_results, "count": len(results)},
-                    content=text_content,
-                    metadata={"action": EmailAction.SEARCH_EMAILS.value, "count": len(results)},
+                    metadata={
+                        "action": EmailAction.SEARCH_EMAILS.value,
+                        "count": len(results),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (EmailAction.LIST_EMAILS.value, "list"):
@@ -62,8 +65,11 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"emails": dict_results, "count": len(results)},
-                    content=text_content,
-                    metadata={"action": EmailAction.LIST_EMAILS.value, "count": len(results)},
+                    metadata={
+                        "action": EmailAction.LIST_EMAILS.value,
+                        "count": len(results),
+                        "formatted": text_content,
+                    },
                 )
 
             elif action_name in (EmailAction.READ_EMAIL.value, "read"):
@@ -81,8 +87,12 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=msg.to_dict(),
-                    content=formatted,
-                    metadata={"action": EmailAction.READ_EMAIL.value, "email_id": msg.id, "subject": msg.subject},
+                    metadata={
+                        "action": EmailAction.READ_EMAIL.value,
+                        "email_id": msg.id,
+                        "subject": msg.subject,
+                        "formatted": formatted,
+                    },
                 )
 
             elif action_name in (EmailAction.SUMMARIZE_EMAIL.value, "summarize"):
@@ -106,8 +116,11 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result={"subject": subject, "sender": sender, "summary": summary_text},
-                    content=summary_text,
-                    metadata={"action": EmailAction.SUMMARIZE_EMAIL.value, "email_id": email_id},
+                    metadata={
+                        "action": EmailAction.SUMMARIZE_EMAIL.value,
+                        "email_id": email_id,
+                        "formatted": summary_text,
+                    },
                 )
 
             elif action_name in (EmailAction.DRAFT_EMAIL.value, "draft"):
@@ -138,8 +151,11 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=draft.to_dict(),
-                    content=formatted,
-                    metadata={"action": EmailAction.DRAFT_EMAIL.value, "draft_id": draft.draft_id},
+                    metadata={
+                        "action": EmailAction.DRAFT_EMAIL.value,
+                        "draft_id": draft.draft_id,
+                        "formatted": formatted,
+                    },
                 )
 
             elif action_name in (EmailAction.SEND_EMAIL.value, "send"):
@@ -165,12 +181,12 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=receipt.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": EmailAction.SEND_EMAIL.value,
                         "message_id": receipt.message_id,
                         "verified": True,
                         "status": "sent",
+                        "formatted": formatted,
                     },
                 )
 
@@ -185,12 +201,12 @@ class EmailHandler(ToolHandler):
                 return ToolOutput(
                     success=True,
                     result=receipt.to_dict(),
-                    content=formatted,
                     metadata={
                         "action": EmailAction.REPLY_EMAIL.value,
                         "message_id": receipt.message_id,
                         "verified": True,
                         "status": "sent",
+                        "formatted": formatted,
                     },
                 )
 
@@ -201,16 +217,24 @@ class EmailHandler(ToolHandler):
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Email operation failed: {exc}",
-                metadata={"action": action_name, "error": type(exc).__name__},
+                metadata={
+                    "action": action_name,
+                    "error": type(exc).__name__,
+                    "formatted": f"Email operation failed: {exc}",
+                },
             )
         except Exception as exc:
             return ToolOutput(
                 success=False,
                 error=str(exc),
-                content=f"Email operation failed: {exc}",
-                metadata={"action": action_name, "error": "unexpected_error"},
+                metadata={
+                    "action": action_name,
+                    "error": "unexpected_error",
+                    "formatted": f"Email operation failed: {exc}",
+                },
             )
+
+    execute = run
 
 
 class EmailTool(BaseTool):

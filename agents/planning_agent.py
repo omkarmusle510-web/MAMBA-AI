@@ -12,6 +12,7 @@ import json
 import re
 from typing import Any
 
+from core.capabilities import CapabilityRegistry
 from core.types import ExecutionPlan, PlanStep
 
 from models.protocols import ModelRouter
@@ -51,8 +52,8 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * messaging: "list_conversations" ({}), "search_conversations" ({"query": "<contact name>"}), "read_messages" ({"conversation_id": "<id or contact name>"}), "draft_message" ({"recipient": "<name>", "content": "..."}), "send_message" ({"recipient": "<name>", "content": "..."}), "reply_message" ({"conversation_id": "<id>", "content": "..."})
 - For compound user requests with multiple distinct actions (e.g. 'Open Notepad and create mamba.txt' or 'Find the email from Rahul, check calendar, and message him'), generate separate, ordered plan steps for each distinct action.
 - Ensure all quotes and special characters within strings (e.g. in commit messages or file contents) are properly escaped so that the response is strictly valid JSON.
-- Steps must be grounded in the user's request. Do not invent capabilities \
-that do not exist.
+- Response formatting instructions (e.g. 'use bullet points', 'give a short answer', 'briefly', 'in one sentence') are formatting constraints for the final response, NOT separate operational plan steps. Do NOT create separate steps like 'format as bullet points' or 'shorten answer'.
+- Steps must be grounded in the user's request and available capabilities. Do not invent capabilities or actions that do not exist or are unsupported (for example: opening a YouTube URL via desktop "open_url" is supported, but in-page video playback or clicking arbitrary web page elements is NOT supported; use "analyze" to answer questions).
 - Do not claim actions have already been performed.
 - Keep plans focused and minimal — only the steps genuinely needed.
 - If the goal is unclear, produce a single clarification step with \
@@ -70,14 +71,22 @@ with no extra step or call required.
 """
 
 
-def _build_user_message(input: AgentInput) -> str:
+def _build_user_message(input: AgentInput, capabilities: CapabilityRegistry | None = None) -> str:
     """Build a compact user message from the execution context."""
     ctx = input.context
     goal = ctx.request.goal
     parts = [f"Goal: {goal}"]
 
-    # Include request metadata if present (e.g. retrieved memories, entities, prior turn).
+    # Include available runtime capabilities if present
     req_meta = ctx.request.metadata
+    if req_meta.get("capabilities"):
+        parts.append(f"Available capabilities:\n{req_meta['capabilities']}")
+    elif capabilities is not None:
+        parts.append(f"Available capabilities:\n{capabilities.format_summary_for_planner()}")
+    elif req_meta.get("capability_context"):
+        parts.append(f"Available capabilities:\n{req_meta['capability_context']}")
+
+    # Include request metadata if present (e.g. retrieved memories, entities, prior turn).
     if req_meta.get("active_entities"):
         ae = req_meta["active_entities"]
         parts.append(f"Active entities: {ae}")
@@ -231,6 +240,7 @@ class PlanningAgent:
         agent: Agent | None = None,
         system_prompt: str | None = None,
         model_parameters: dict[str, Any] | None = None,
+        capabilities: CapabilityRegistry | None = None,
     ) -> None:
         self._router = router
         self._agent = agent or Agent(
@@ -242,6 +252,7 @@ class PlanningAgent:
             "temperature": 0,
             "max_tokens": 2048,
         }
+        self._capabilities = capabilities
 
     @property
     def agent(self) -> Agent:
@@ -255,7 +266,7 @@ class PlanningAgent:
             → ModelResponse → parse JSON → validate → ExecutionPlan
         """
         # 1. Build the model request.
-        user_message = _build_user_message(input)
+        user_message = _build_user_message(input, capabilities=self._capabilities)
         request = ModelRequest(
             input=user_message,
             system_instruction=self._system_prompt,

@@ -18,6 +18,12 @@ from verification.protocols import Verifier
 from verification.types import UNAVAILABLE, VerificationRequest, VerificationStatus
 from verification.verifier import DefaultVerifier
 
+from .capabilities import (
+    CapabilityDescriptor,
+    CapabilityRegistry,
+    CapabilityStatus,
+    default_capability_registry,
+)
 from .context import ExecutionContext
 from .errors import CoreError
 from .protocols import Executor, Planner
@@ -178,6 +184,7 @@ class Brain:
     verifier: Verifier | None = None
     model_router: ModelRouter | None = None
     max_cycles: int = _DEFAULT_MAX_CYCLES
+    capabilities: CapabilityRegistry | None = None
     _pending_approval: PendingApproval | None = field(default=None, init=False)
     _last_turn_context: dict[str, Any] | None = field(default=None, init=False)
     _active_entities: dict[str, str] = field(default_factory=dict, init=False)
@@ -187,9 +194,19 @@ class Brain:
             self.permissions = DefaultPermissionPolicy()
         if self.verifier is None:
             self.verifier = DefaultVerifier()
+        if self.capabilities is None:
+            self.capabilities = default_capability_registry()
         self._pending_approval = None
         self._last_turn_context = None
         self._active_entities = {}
+
+    def is_capability_available(self, capability_id: str) -> bool:
+        """Check if a capability is available and configured at runtime."""
+        return self.capabilities.is_available(capability_id) if self.capabilities else False
+
+    def get_capability(self, capability_id: str) -> CapabilityDescriptor | None:
+        """Retrieve capability descriptor."""
+        return self.capabilities.get_capability(capability_id) if self.capabilities else None
 
     def run(self, request: str | UserRequest) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle."""
@@ -206,6 +223,11 @@ class Brain:
                 if isinstance(request, str) and not request.strip()
                 else f"expected str or UserRequest, got {type(request).__name__}",
             )
+
+        # ── 1a. Capability Awareness Context ──
+        if self.capabilities is not None:
+            user_request.metadata["capabilities"] = self.capabilities.format_summary_for_planner()
+            user_request.metadata["capability_context"] = self.capabilities.format_system_context()
 
         # ── 1b. Prior Turn Context & Active Entities Propagation ──
         if self._last_turn_context and "prior_turn" not in user_request.metadata:
@@ -594,7 +616,7 @@ class Brain:
 
             if outcome == _StepOutcome.FAILED:
                 # Context already marked failed
-                return context.record.to_result()
+                return context.record.to_result(output=_last_observation_content(context))
 
             if outcome == _StepOutcome.REPLAN:
                 # An observation asked for re-planning, or the planner
@@ -690,6 +712,28 @@ class Brain:
 
         Returns (outcome, info) where outcome is FINISHED, REPLAN, FAILED, or AWAITING_APPROVAL.
         """
+        # ── Capability Availability Check ──
+        if self.capabilities is not None:
+            cap = self.capabilities.find_capability_for_action(step.intent)
+            if cap is None and step.metadata.get("capability_id"):
+                cap = self.capabilities.get_capability(step.metadata["capability_id"])
+            if cap is not None and not cap.is_available:
+                if cap.status == CapabilityStatus.NOT_CONFIGURED or not cap.provider_configured:
+                    reason = f"I have {cap.name.lower()} capabilities, but no {cap.name.lower()} provider is currently configured."
+                elif cap.status == CapabilityStatus.DISABLED:
+                    reason = f"The {cap.name.lower()} capability is currently disabled."
+                else:
+                    reason = f"Action '{step.intent}' is currently unavailable under {cap.name}."
+                obs = Observation(
+                    step_id=step.id,
+                    content=reason,
+                    success=False,
+                    metadata={"capability_unavailable": True, "capability_id": cap.capability_id},
+                )
+                context.add_observation(obs)
+                context.mark_failed(reason)
+                return _StepOutcome.FAILED, reason
+
         # ── Permission ──
         if self.permissions is not None:
             allowed, reason, requires_approval = self._evaluate_permission(step, context)
@@ -1016,6 +1060,7 @@ def create_brain(
     verifier: Verifier | None = None,
     model_router: ModelRouter | None = None,
     max_cycles: int = _DEFAULT_MAX_CYCLES,
+    capabilities: CapabilityRegistry | None = None,
 ) -> Brain:
     """Convenience factory to create a Brain instance."""
     return Brain(
@@ -1026,4 +1071,5 @@ def create_brain(
         verifier=verifier,
         model_router=model_router,
         max_cycles=max_cycles,
+        capabilities=capabilities,
     )
