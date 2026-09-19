@@ -499,3 +499,126 @@ def test_existing_memory_behavior_compatible(tmp_path: Path):
     assert deleted is True
     assert len(store.retrieve(query).entries) == 0
 
+
+# 18. Short-fact supersession edge cases
+def test_short_fact_supersession(tmp_path: Path):
+    """Verify that short factual statements correctly supersede older conflicting facts."""
+    db_file = tmp_path / "short_facts.db"
+    store = PersistentStore(db_path=db_file)
+    manager = MemoryManager(store=store)
+
+    # Name replacement: "My name is Alice" -> "My name is Bob"
+    n1 = manager.remember("My name is Alice", memory_type=MemoryType.USER_FACT)
+    assert n1 is not None
+    n2 = manager.remember("My name is Bob", memory_type=MemoryType.USER_FACT)
+    assert n2 is not None
+
+    res_name = store.retrieve(MemoryQuery(status=MemoryStatus.SUPERSEDED))
+    assert any(e.id == n1.id and e.superseded_by == n2.id for e in res_name.entries)
+
+    # Location replacement: "I live in Paris" -> "I live in London"
+    l1 = manager.remember("I live in Paris", memory_type=MemoryType.USER_FACT)
+    assert l1 is not None
+    l2 = manager.remember("I live in London", memory_type=MemoryType.USER_FACT)
+    assert l2 is not None
+
+    res_loc = store.retrieve(MemoryQuery(status=MemoryStatus.SUPERSEDED))
+    assert any(e.id == l1.id and e.superseded_by == l2.id for e in res_loc.entries)
+
+    # Preference replacement: "My favorite editor is Vim" -> "My favorite editor is Emacs"
+    p1 = manager.remember("My favorite editor is Vim", memory_type=MemoryType.USER_PREFERENCE)
+    assert p1 is not None
+    p2 = manager.remember("My favorite editor is Emacs", memory_type=MemoryType.USER_PREFERENCE)
+    assert p2 is not None
+
+    res_pref = store.retrieve(MemoryQuery(status=MemoryStatus.SUPERSEDED))
+    assert any(e.id == p1.id and e.superseded_by == p2.id for e in res_pref.entries)
+
+    # Active queries must return only current values
+    assert "Bob" in manager.retrieve("my name").entries[0].content
+    assert "London" in manager.retrieve("where I live").entries[0].content
+    assert "Emacs" in manager.retrieve("favorite editor").entries[0].content
+
+
+# 19. Unrelated short facts are NOT incorrectly superseded
+def test_unrelated_short_facts_not_superseded(tmp_path: Path):
+    """Verify that distinct facts sharing common structural words are NOT falsely superseded."""
+    db_file = tmp_path / "unrelated.db"
+    store = PersistentStore(db_path=db_file)
+    manager = MemoryManager(store=store)
+
+    f1 = manager.remember("My name is Alice", memory_type=MemoryType.USER_FACT)
+    f2 = manager.remember("My car is blue", memory_type=MemoryType.USER_FACT)
+    assert f1 is not None and f2 is not None
+
+    # Both must remain active
+    active = store.retrieve(MemoryQuery(status=MemoryStatus.ACTIVE))
+    active_ids = {e.id for e in active.entries}
+    assert f1.id in active_ids
+    assert f2.id in active_ids
+
+    # "I live in Paris" vs "I work in tech"
+    f3 = manager.remember("I live in Paris", memory_type=MemoryType.USER_FACT)
+    f4 = manager.remember("I work in tech", memory_type=MemoryType.USER_FACT)
+    assert f3 is not None and f4 is not None
+
+    active_after = store.retrieve(MemoryQuery(status=MemoryStatus.ACTIVE))
+    active_ids_after = {e.id for e in active_after.entries}
+    assert f3.id in active_ids_after
+    assert f4.id in active_ids_after
+
+
+# 20. Keyword retrieval fallback for all-stopword / stopword-heavy queries
+def test_all_stopword_retrieval_fallback(tmp_path: Path):
+    """Verify queries containing only or mostly stopwords don't return zero matches."""
+    db_file = tmp_path / "stopwords_query.db"
+    store = PersistentStore(db_path=db_file)
+
+    entry1 = MemoryEntry(content="Who am I and what is my purpose")
+    entry2 = MemoryEntry(content="Tell me about this project and its details")
+    store.store(entry1)
+    store.store(entry2)
+
+    # All tokens in "Who am I?" are in STOPWORDS -> fallback must match entry1
+    res1 = store.retrieve(MemoryQuery(query="Who am I?"))
+    assert len(res1.entries) >= 1
+    assert "Who am I" in res1.entries[0].content
+
+    # "Tell me about this" is all stopwords -> fallback must match entry2
+    res2 = store.retrieve(MemoryQuery(query="Tell me about this"))
+    assert len(res2.entries) >= 1
+    assert "Tell me about this project" in res2.entries[0].content
+
+    # Test InMemoryStore has identical fallback behavior
+    mem_store = InMemoryStore()
+    mem_store.store(entry1)
+    mem_store.store(entry2)
+
+    mem_res1 = mem_store.retrieve(MemoryQuery(query="Who am I?"))
+    assert len(mem_res1.entries) >= 1
+
+    mem_res2 = mem_store.retrieve(MemoryQuery(query="Tell me about this"))
+    assert len(mem_res2.entries) >= 1
+
+
+# 21. Centralized STOPWORDS definition verification
+def test_centralized_stopwords():
+    """Verify STOPWORDS is canonically defined and identically imported across modules."""
+    from memory import STOPWORDS as exported_sw
+    from memory.persistent import STOPWORDS as persistent_sw
+    from memory.retrieval import STOPWORDS as retrieval_sw
+    from memory.stopwords import STOPWORDS as canonical_sw
+    from memory.store import STOPWORDS as store_sw
+    from memory.manager import STOPWORDS as manager_sw
+
+    assert canonical_sw is exported_sw
+    assert canonical_sw is persistent_sw
+    assert canonical_sw is retrieval_sw
+    assert canonical_sw is store_sw
+    assert canonical_sw is manager_sw
+    assert "the" in canonical_sw
+    assert "and" in canonical_sw
+    assert "who" in canonical_sw
+    assert "about" in canonical_sw
+
+

@@ -47,5 +47,6 @@ __all__ = [
     "NullEmbeddingProvider",
     "PersistentStore",
     "SentenceTransformerEmbeddingProvider",
+    "STOPWORDS",
     "VectorIndex",
 ]

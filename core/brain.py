@@ -59,12 +59,22 @@ def _plan_needs_replanning(plan: ExecutionPlan) -> bool:
     return plan.metadata.get(_NEEDS_REPLANNING_KEY) is True
 
 
-def _plan_signature(plan: ExecutionPlan) -> tuple[tuple[str, str], ...]:
-    """A cheap fingerprint used to detect a planner repeating itself."""
-    return tuple(
-        (step.intent.strip().lower(), step.description.strip())
-        for step in plan.steps
-    )
+def _step_signature(step: PlanStep) -> tuple[str, str, str]:
+    """A fingerprint used to identify a step (intent, description, target/path/command)."""
+    target = str(
+        step.metadata.get("path")
+        or step.metadata.get("file")
+        or step.metadata.get("command")
+        or step.metadata.get("url")
+        or step.metadata.get("query")
+        or ""
+    ).strip().lower()
+    return (step.intent.strip().lower(), step.description.strip().lower(), target)
+
+
+def _plan_signature(plan: ExecutionPlan) -> tuple[tuple[str, str, str], ...]:
+    """A fingerprint used to detect a planner repeating an identical plan."""
+    return tuple(_step_signature(step) for step in plan.steps)
 
 
 _APPROVAL_PHRASES: frozenset[str] = frozenset(
@@ -557,18 +567,29 @@ class Brain:
     def _retrieve_memory(
         self, context: ExecutionContext, user_request: UserRequest,
     ) -> bool:
-        """Query memory store and attach relevant memories to context.
+        """Attach project context and query memory store for relevant memories.
 
         Returns True if successful (or no memory configured), False on failure.
         """
+        project = (
+            user_request.metadata.get("project")
+            or self._active_entities.get("repository")
+            or ""
+        )
+        if not project or "project_context" not in context.record.request.metadata:
+            try:
+                from .project import discover_project
+                proj_ctx = discover_project()
+                if not project:
+                    project = proj_ctx.name
+                context.record.request.metadata["project_context"] = proj_ctx.format_summary()
+                context.record.request.metadata["project_name"] = proj_ctx.name
+            except Exception:
+                pass
+
         if self.memory is None and self._memory_manager is None:
             return True
         try:
-            project = (
-                user_request.metadata.get("project")
-                or self._active_entities.get("repository")
-                or ""
-            )
             if self._memory_manager is not None:
                 result = self._memory_manager.retrieve(
                     query=user_request.goal,
@@ -614,7 +635,8 @@ class Brain:
              observations already gathered.
         """
         cycles_used = 0
-        previous_signature: tuple[tuple[str, str], ...] | None = None
+        previous_signature: tuple[tuple[str, str, str], ...] | None = None
+        completed_signatures: set[tuple[str, str, str]] = set()
 
         while cycles_used < self.max_cycles:
             cycles_used += 1
@@ -624,19 +646,31 @@ class Brain:
             if plan is None:
                 return context.record.to_result()
 
-            # ── Loop-prevention: a planner repeating an identical plan is
-            # making no progress; stop instead of burning further cycles. ──
-            signature = _plan_signature(plan)
-            if signature == previous_signature:
+            # Filter out steps that have already completed in prior cycles
+            remaining_steps = [
+                s for s in plan.steps if _step_signature(s) not in completed_signatures
+            ]
+
+            if not remaining_steps and plan.steps:
+                # All steps planned have already executed successfully in earlier cycles!
+                # The workflow is complete; finish cleanly without looping.
+                break
+
+            # ── Loop-prevention: check if the remaining plan repeats an identical unprogressed sequence ──
+            remaining_signature = tuple(_step_signature(s) for s in remaining_steps)
+            if remaining_signature == previous_signature:
                 context.mark_failed(
                     "replanning produced an identical plan with no new "
                     "information; stopping to avoid a pointless loop"
                 )
                 return context.record.to_result()
-            previous_signature = signature
+            previous_signature = remaining_signature
+
+            # Create an effective plan with remaining steps
+            effective_plan = replace(plan, steps=tuple(remaining_steps))
 
             # ── Execute plan steps ──
-            outcome = self._execute_plan(context, plan, user_request)
+            outcome = self._execute_plan(context, effective_plan, user_request, completed_signatures)
 
             if outcome == _StepOutcome.AWAITING_APPROVAL:
                 reason = (
@@ -718,6 +752,7 @@ class Brain:
         context: ExecutionContext,
         plan: ExecutionPlan,
         user_request: UserRequest,
+        completed_signatures: set[tuple[str, str, str]] | None = None,
     ) -> str:
         """Execute steps from a plan, evaluating each observation.
 
@@ -734,7 +769,22 @@ class Brain:
         """
         for idx, step in enumerate(plan.steps):
             outcome, info = self._execute_step(context, step)
-            if outcome == _StepOutcome.AWAITING_APPROVAL:
+            if outcome == _StepOutcome.FINISHED:
+                if completed_signatures is not None:
+                    completed_signatures.add(_step_signature(step))
+                step_summary = {
+                    "intent": step.intent,
+                    "description": step.description,
+                    "target": str(
+                        step.metadata.get("path")
+                        or step.metadata.get("command")
+                        or step.metadata.get("url")
+                        or ""
+                    ),
+                }
+                completed_list = context.record.request.metadata.setdefault("completed_steps", [])
+                completed_list.append(step_summary)
+            elif outcome == _StepOutcome.AWAITING_APPROVAL:
                 self._pending_approval = PendingApproval(
                     step=step,
                     context=context,
@@ -744,7 +794,7 @@ class Brain:
                     reason=info,
                 )
                 return _StepOutcome.AWAITING_APPROVAL
-            if outcome != _StepOutcome.FINISHED:
+            else:
                 return outcome
 
         if _plan_needs_replanning(plan):
@@ -1077,6 +1127,7 @@ class Brain:
             last_content = _last_observation_content(context)
             project = (
                 user_request.metadata.get("project")
+                or context.record.request.metadata.get("project_name")
                 or self._active_entities.get("repository")
                 or ""
             )

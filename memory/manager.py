@@ -7,6 +7,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from memory.stopwords import STOPWORDS
+
 from .embedding import EmbeddingProvider
 from .protocols import ExtendedMemoryStore, MemoryStore
 from .retrieval import HybridRetriever
@@ -26,7 +28,7 @@ _SECRET_PATTERNS = [
 
 # Ephemeral noise patterns
 _NOISE_PATTERNS = [
-    re.compile(r"(?i)^(?:ok|okay|yes|no|done|thanks|thank you|hello|hi|hey)\.?$"),
+    re.compile(r"(?i)^(?:ok|okay|yes|no|done|thanks|thank you|hello|hi|hey)[.!?,]*$"),
     re.compile(r"(?i)^listening(?:\.\.\.)?$"),
     re.compile(r"(?i)^processing(?:\.\.\.)?$"),
 ]
@@ -211,10 +213,12 @@ class MemoryManager:
                 # Topic overlap check: e.g. "favorite database is X" vs "favorite database is Y"
                 old_words = set(re.findall(r"\w+", old.content.casefold()))
                 new_words = set(re.findall(r"\w+", new_entry.content.casefold()))
-                overlap = old_words & new_words - _STOPWORDS
+                overlap = (old_words & new_words) - STOPWORDS
 
-                # High topic overlap indicating conflict or replacement
-                if len(overlap) >= 2:
+                # Meaningful topic overlap indicating conflict or replacement
+                is_short = len(old_words) <= 6 or len(new_words) <= 6
+                threshold = 1 if is_short else 2
+                if len(overlap) >= threshold and old.content.strip().casefold() != new_entry.content.strip().casefold():
                     logger.info("Memory '%s' superseded by '%s'", old.id, new_entry.id)
                     self.store.update(
                         old.id,

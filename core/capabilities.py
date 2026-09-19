@@ -409,6 +409,22 @@ def default_capability_registry(
             provider="model_router",
             provider_configured=True,
         ),
+        CapabilityDescriptor(
+            capability_id="project_understanding",
+            name="Project Understanding",
+            description="Discover project structure, entry points, architecture, problems, and git context.",
+            supported_actions=(
+                "project_info",
+                "explain_architecture",
+                "find_problems",
+                "relevant_files",
+                "git_context",
+            ),
+            limitations=("Read-only project analysis; does not mutate code or execute git commit/push",),
+            status=CapabilityStatus.AVAILABLE,
+            provider="local",
+            provider_configured=True,
+        ),
     )
 
     return CapabilityRegistry(descriptors)

@@ -8,30 +8,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .errors import InvalidMemoryRequestError, MemoryRetrievalError, MemoryStorageError
+from .stopwords import STOPWORDS
 from .types import MemoryEntry, MemoryQuery, MemoryResult, MemoryStatus, MemoryType
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-_STOPWORDS = frozenset(
-    {
-        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
-        "at", "by", "for", "with", "about", "against", "between", "into",
-        "through", "during", "before", "after", "above", "below", "to", "from",
-        "up", "down", "in", "out", "on", "off", "over", "under", "again",
-        "further", "then", "once", "here", "there", "all", "any", "both",
-        "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-        "not", "only", "own", "same", "so", "than", "too", "very", "can",
-        "will", "just", "don", "should", "now", "i", "me", "my", "we", "our",
-        "you", "your", "he", "him", "his", "she", "her", "it", "its", "they",
-        "them", "their", "what", "which", "who", "whom", "this", "that",
-        "these", "those", "am", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "having", "do", "does", "did", "doing",
-        "tell", "show", "give", "get", "find", "please", "recall", "remember",
-    }
-)
 
 
 def _metadata_matches(entry_metadata: dict[str, Any], filters: dict[str, Any]) -> bool:
@@ -48,10 +30,13 @@ def _content_matches(content: str, query: str) -> bool:
 
     query_tokens = [
         t for t in re.findall(r"\w+", query_lower)
-        if len(t) > 1 and t not in _STOPWORDS
+        if len(t) > 1 and t not in STOPWORDS
     ]
+    # Safe fallback if stopword filtering stripped all tokens (e.g. "Who am I?", "Tell me about this")
     if not query_tokens:
-        return False
+        query_tokens = [t for t in re.findall(r"\w+", query_lower) if len(t) > 1]
+    if not query_tokens:
+        return query_lower in content_lower
 
     content_tokens = set(re.findall(r"\w+", content_lower))
     matches = sum(1 for t in query_tokens if t in content_tokens)
@@ -201,14 +186,27 @@ class InMemoryStore:
         return True
 
     def find_related(self, content: str, project: str = "", limit: int = 5) -> list[MemoryEntry]:
-        query = MemoryQuery(
-            query=content,
-            project=project,
-            status=MemoryStatus.ACTIVE,
-            limit=limit,
-        )
-        res = self.retrieve(query)
-        return list(res.entries)
+        content_tokens = [
+            t for t in re.findall(r"\w+", content.casefold())
+            if len(t) > 1 and t not in STOPWORDS
+        ]
+        if not content_tokens:
+            content_tokens = [t for t in re.findall(r"\w+", content.casefold()) if len(t) > 1]
+
+        token_set = set(content_tokens)
+        scored: list[tuple[int, MemoryEntry]] = []
+        for entry in self._entries.values():
+            if entry.status != MemoryStatus.ACTIVE:
+                continue
+            if project.strip() and entry.project != project.strip():
+                continue
+            entry_tokens = set(re.findall(r"\w+", entry.content.casefold()))
+            overlap = len(token_set & entry_tokens)
+            if overlap > 0 or not token_set:
+                scored.append((overlap, entry))
+
+        scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
+        return [item[1] for item in scored[:limit]]
 
     def store_embedding(self, memory_id: str, embedding: list[float]) -> bool:
         if memory_id not in self._entries or not embedding:

@@ -27,7 +27,7 @@ from .types import SkillInput, SkillOutput
 
 _LIST_DIR_SUPPORTED_INTENTS = frozenset({"list_directory", "list_dir"})
 _READ_FILE_SUPPORTED_INTENTS = frozenset({"read_file"})
-_WRITE_FILE_SUPPORTED_INTENTS = frozenset({"write_file"})
+_WRITE_FILE_SUPPORTED_INTENTS = frozenset({"write_file", "create_file"})
 _CREATE_DIR_SUPPORTED_INTENTS = frozenset(
     {"create_directory", "create_dir", "mkdir", "make_directory"}
 )
@@ -284,15 +284,18 @@ class WriteFileSkill(BaseSkill):
             )
 
         if "content" not in input.task_input.step_metadata and "text" not in input.task_input.step_metadata:
-            return SkillOutput(
-                content="Missing required argument: 'content'",
-                success=False,
-                metadata={"error": "missing_content"},
-            )
-
-        content = input.task_input.step_metadata.get("content")
-        if content is None:
-            content = input.task_input.step_metadata.get("text")
+            if intent == "create_file":
+                content = ""
+            else:
+                return SkillOutput(
+                    content="Missing required argument: 'content'",
+                    success=False,
+                    metadata={"error": "missing_content"},
+                )
+        else:
+            content = input.task_input.step_metadata.get("content")
+            if content is None:
+                content = input.task_input.step_metadata.get("text")
 
         if not isinstance(content, str):
             return SkillOutput(

@@ -40,6 +40,7 @@ from .github import (
 )
 from .memory import MemorySkill, MemoryTaskHandler
 from .messaging import MessagingTaskHandler
+from .project import ProjectTaskHandler
 from .screen import ScreenTaskHandler
 from .system import SystemTaskHandler
 from .terminal import TerminalSkill, TerminalTaskHandler
@@ -294,6 +295,34 @@ _MESSAGING_INTENTS = frozenset(
     }
 )
 
+_PROJECT_INTENTS = frozenset(
+    {
+        "project_info",
+        "what_is_this_project",
+        "project_summary",
+        "inspect_project",
+        "project",
+        "explain_architecture",
+        "project_architecture",
+        "architecture",
+        "describe_architecture",
+        "find_problems",
+        "diagnose_project",
+        "project_health",
+        "check_problems",
+        "detect_problems",
+        "project_issues",
+        "relevant_files",
+        "find_relevant_files",
+        "related_files",
+        "locate_files",
+        "git_context",
+        "project_git_status",
+        "git_status",
+        "git_state",
+    }
+)
+
 
 def create_mixed_task_executor(
     *,
@@ -321,9 +350,10 @@ def create_mixed_task_executor(
     email_handler: TaskHandler | None = None,
     calendar_handler: TaskHandler | None = None,
     messaging_handler: TaskHandler | None = None,
+    project_handler: TaskHandler | None = None,
     extra_handlers: Mapping[str, TaskHandler] | None = None,
 ) -> TaskExecutor:
-    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, web, memory, email, calendar, and messaging capabilities."""
+    """Create a TaskExecutor wired to filesystem, terminal, GitHub, analyze, desktop, system, screen, web, memory, email, calendar, messaging, and project understanding capabilities."""
     if filesystem_handler is None:
         filesystem_handler = FilesystemTaskHandler(
             list_directory_skill=ListDirectorySkill(root_dir=root_dir, executor=tool_executor),
@@ -395,6 +425,9 @@ def create_mixed_task_executor(
     if messaging_handler is None:
         messaging_handler = MessagingTaskHandler()
 
+    if project_handler is None:
+        project_handler = ProjectTaskHandler(root_dir=Path(root_dir) if root_dir else None)
+
     handlers: dict[str, TaskHandler] = {}
     for intent in _FILESYSTEM_INTENTS:
         handlers[intent] = filesystem_handler
@@ -433,6 +466,9 @@ def create_mixed_task_executor(
 
     for intent in _MESSAGING_INTENTS:
         handlers[intent] = messaging_handler
+
+    for intent in _PROJECT_INTENTS:
+        handlers[intent] = project_handler
 
     if extra_handlers:
         handlers.update(extra_handlers)

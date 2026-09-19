@@ -50,6 +50,7 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * email: "search_emails" ({"query": "<query>"}), "list_emails" ({"max_results": <int>}), "read_email" ({"email_id": "<id>"}), "summarize_email" ({"email_id": "<id>"}), "draft_email" ({"to": "<recipient>", "subject": "...", "body": "..."}), "send_email" ({"to": "<recipient>", "subject": "...", "body": "..."}), "reply_email" ({"email_id": "<id>", "body": "..."})
   * calendar: "list_events" ({"start_time": "<iso>", "end_time": "<iso>"}), "search_events" ({"query": "<query>"}), "get_event" ({"event_id": "<id>"}), "check_conflicts" ({"start_time": "<iso>", "end_time": "<iso>"}), "create_event" ({"title": "...", "start_time": "<iso>", "end_time": "<iso>", "description": "...", "location": "..."}), "modify_event" ({"event_id": "<id>", ...}), "cancel_event" ({"event_id": "<id>"})
   * messaging: "list_conversations" ({}), "search_conversations" ({"query": "<contact name>"}), "read_messages" ({"conversation_id": "<id or contact name>"}), "draft_message" ({"recipient": "<name>", "content": "..."}), "send_message" ({"recipient": "<name>", "content": "..."}), "reply_message" ({"conversation_id": "<id>", "content": "..."})
+  * project understanding: "project_info" ({"path": "."}), "explain_architecture" ({"path": "."}), "find_problems" ({"path": "."}), "relevant_files" ({"query": "<query>"}), "git_context" ({"path": "."})
 - For compound user requests with multiple distinct actions (e.g. 'Open Notepad and create mamba.txt' or 'Find the email from Rahul, check calendar, and message him'), generate separate, ordered plan steps for each distinct action.
 - Ensure all quotes and special characters within strings (e.g. in commit messages or file contents) are properly escaped so that the response is strictly valid JSON.
 - Response formatting instructions (e.g. 'use bullet points', 'give a short answer', 'briefly', 'in one sentence') are formatting constraints for the final response, NOT separate operational plan steps. Do NOT create separate steps like 'format as bullet points' or 'shorten answer'.
@@ -101,6 +102,23 @@ def _build_user_message(input: AgentInput, capabilities: CapabilityRegistry | No
     if req_meta.get("retrieved_memories"):
         memories = req_meta["retrieved_memories"]
         parts.append(f"Relevant memory: {'; '.join(str(m) for m in memories[:5])}")
+
+    # Include project context if present
+    if req_meta.get("project_context"):
+        parts.append(f"Project context:\n{req_meta['project_context']}")
+
+    # Include completed steps if re-planning
+    completed_steps = req_meta.get("completed_steps")
+    if completed_steps:
+        step_lines = [
+            f"- {s.get('intent')}: {s.get('description')} ({s.get('target', '')})"
+            for s in completed_steps
+        ]
+        parts.append(
+            "Already completed steps in this workflow (DO NOT REPEAT THESE):\n"
+            + "\n".join(step_lines)
+            + "\nPlan ONLY the remaining or recovery steps needed to achieve the goal."
+        )
 
     # Include prior observations if re-planning.
     observations = ctx.observations

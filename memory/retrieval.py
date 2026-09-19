@@ -8,28 +8,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .embedding import EmbeddingProvider
+from .stopwords import STOPWORDS
 from .types import MemoryEntry, MemoryQuery, MemoryResult, MemoryStatus, MemoryType
 from .vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
-
-_STOPWORDS = frozenset(
-    {
-        "a", "an", "the", "and", "or", "but", "if", "then", "else", "when",
-        "at", "by", "for", "with", "about", "against", "between", "into",
-        "through", "during", "before", "after", "above", "below", "to", "from",
-        "up", "down", "in", "out", "on", "off", "over", "under", "again",
-        "further", "then", "once", "here", "there", "all", "any", "both",
-        "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-        "not", "only", "own", "same", "so", "than", "too", "very", "can",
-        "will", "just", "don", "should", "now", "i", "me", "my", "we", "our",
-        "you", "your", "he", "him", "his", "she", "her", "it", "its", "they",
-        "them", "their", "what", "which", "who", "whom", "this", "that",
-        "these", "those", "am", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "having", "do", "does", "did", "doing",
-        "tell", "show", "give", "get", "find", "please", "recall", "remember",
-    }
-)
 
 
 def _compute_keyword_score(content: str, query: str) -> float:
@@ -46,7 +29,7 @@ def _compute_keyword_score(content: str, query: str) -> float:
 
     query_tokens = [
         t for t in re.findall(r"\w+", query_lower)
-        if len(t) > 1 and t not in _STOPWORDS
+        if len(t) > 1 and t not in STOPWORDS
     ]
     if not query_tokens:
         # Fall back to all tokens if all were stopwords
