@@ -406,3 +406,27 @@ def test_analyze_skill_uses_model_router_fallback():
     assert out.metadata.get("provider") == "backup"
 
 
+def test_mamba_runtime_canonical_execution():
+    """Verify MambaRuntime acts as the canonical application boundary to Brain with progress callbacks."""
+    from core.runtime import MambaRuntime
+
+    step = PlanStep(description="Say hello", intent="greet")
+    plan = ExecutionPlan(steps=(step,))
+    planner = StaticPlanner([plan])
+
+    handler = EchoTaskHandler()
+    executor = TaskExecutor(handlers={"greet": handler})
+    brain = Brain(planner=planner, executor=executor)
+    runtime = MambaRuntime(brain=brain)
+
+    milestones: list[str] = []
+    result = runtime.run("Say hello", on_progress=lambda m: milestones.append(m))
+
+    assert result.status == ResultStatus.COMPLETED
+    assert "Executed greet: Say hello" in result.output
+    assert "Understanding..." in milestones
+    assert "Planning..." in milestones
+    assert "Executing..." in milestones
+
+
+

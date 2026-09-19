@@ -9,8 +9,9 @@ from agents.planner import AgentPlanner
 from agents.planning_agent import PlanningAgent
 from core import CapabilityRegistry, default_capability_registry
 from core.brain import Brain
+from core.runtime import MambaRuntime
 from core.types import ExecutionResult, ResultStatus
-from memory import InMemoryStore, MemoryStore, PersistentStore
+from memory import MemoryStore, PersistentStore
 from models import DefaultModelRouter, GeminiModelProvider, GroqModelProvider, NVIDIAModelProvider
 from models.errors import ModelProviderError
 from skills import create_mixed_task_executor
@@ -25,12 +26,16 @@ except ImportError:
 _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 
-def create_brain(
+def create_runtime(
     *,
     memory: MemoryStore | None = None,
     capabilities: CapabilityRegistry | None = None,
-) -> Brain:
-    """Compose and wire the Mamba runtime components."""
+) -> MambaRuntime:
+    """Compose and wire the Mamba runtime components.
+
+    Returns the canonical MambaRuntime boundary wrapping a fully
+    configured Brain instance.
+    """
     providers = []
 
     # NVIDIA text provider — optional; skip if credentials are missing.
@@ -82,7 +87,7 @@ def create_brain(
         memory = PersistentStore()
     executor = create_mixed_task_executor(model_router=router, memory_store=memory)
 
-    return Brain(
+    brain = Brain(
         planner=planner,
         executor=executor,
         memory=memory,
@@ -90,9 +95,32 @@ def create_brain(
         capabilities=capabilities,
     )
 
+    return MambaRuntime(brain=brain)
+
+
+def create_brain(
+    *,
+    memory: MemoryStore | None = None,
+    capabilities: CapabilityRegistry | None = None,
+) -> Brain:
+    """Backwards-compatible convenience: returns Brain directly."""
+    return create_runtime(memory=memory, capabilities=capabilities).brain
+
 
 def _display_result(result: ExecutionResult) -> None:
-    """Display execution result and observations."""
+    """Display execution result to user with clean formatting."""
+    # Detect pending approval prompt — do not show as "failed"
+    is_approval = any(
+        obs.metadata.get("awaiting_approval") for obs in result.observations
+    )
+
+    if is_approval:
+        print("\n[Confirmation Required]")
+        if result.output:
+            print(result.output.strip())
+        print()
+        return
+
     print(f"\n[Status: {result.status.value}]")
     if result.status == ResultStatus.COMPLETED:
         if result.output:
@@ -101,11 +129,16 @@ def _display_result(result: ExecutionResult) -> None:
             for obs in result.observations:
                 print(obs.content.strip())
     else:
-        if result.error:
-            print(f"Error: {result.error}")
-        elif result.output:
+        if result.output:
             print(result.output.strip())
+        elif result.error:
+            print(f"Error: {result.error}")
     print()
+
+
+def _show_progress(milestone: str) -> None:
+    """Print a lightweight progress milestone inline."""
+    print(f"  ⟩ {milestone}", flush=True)
 
 
 def main() -> None:
@@ -114,7 +147,7 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
 
     try:
-        brain = create_brain()
+        runtime = create_runtime()
     except Exception as exc:
         print(f"Failed to initialize Mamba: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -124,7 +157,7 @@ def main() -> None:
         from voice import VoiceInterface
 
         try:
-            voice_app = VoiceInterface(brain)
+            voice_app = VoiceInterface(runtime)
             voice_app.voice_loop()
         except Exception as exc:
             print(f"Voice interface error: {exc}", file=sys.stderr)
@@ -133,7 +166,7 @@ def main() -> None:
     # One-shot mode if arguments provided
     if len(sys.argv) > 1:
         request_text = " ".join(sys.argv[1:]).strip()
-        result = brain.run(request_text)
+        result = runtime.run(request_text, on_progress=_show_progress)
         _display_result(result)
         return
 
@@ -154,16 +187,15 @@ def main() -> None:
             from voice import VoiceInterface
 
             try:
-                voice_app = VoiceInterface(brain)
+                voice_app = VoiceInterface(runtime)
                 voice_app.voice_loop()
             except Exception as exc:
                 print(f"Voice interface error: {exc}", file=sys.stderr)
             continue
 
-        result = brain.run(user_input)
+        result = runtime.run(user_input, on_progress=_show_progress)
         _display_result(result)
 
 
 if __name__ == "__main__":
     main()
-

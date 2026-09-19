@@ -250,8 +250,20 @@ class Brain:
         """Retrieve capability descriptor."""
         return self.capabilities.get_capability(capability_id) if self.capabilities else None
 
-    def run(self, request: str | UserRequest) -> ExecutionResult:
-        """Run a user request through the observation-driven execution lifecycle."""
+    def run(
+        self,
+        request: str | UserRequest,
+        *,
+        on_progress: Any = None,
+    ) -> ExecutionResult:
+        """Run a user request through the observation-driven execution lifecycle.
+
+        Args:
+            request: User goal as string or UserRequest.
+            on_progress: Optional callable(str) receiving lightweight
+                milestone updates (e.g. "Planning...", "Executing...").
+        """
+        _progress = on_progress if callable(on_progress) else None
 
         # ── 1. Request Intake ──
         user_request = self._intake(request)
@@ -367,11 +379,13 @@ class Brain:
         context = ExecutionContext.from_request(user_request)
 
         # ── 3. Memory Retrieval ──
+        if _progress:
+            _progress("Understanding...")
         if not self._retrieve_memory(context, user_request):
             return context.record.to_result()
 
         # ── 4. Observation-Driven Execution Loop ──
-        res = self._execution_loop(context, user_request)
+        res = self._execution_loop(context, user_request, on_progress=_progress)
         self._record_turn_context(user_request, res)
         return res
 
@@ -613,6 +627,7 @@ class Brain:
 
     def _execution_loop(
         self, context: ExecutionContext, user_request: UserRequest,
+        *, on_progress: Any = None,
     ) -> ExecutionResult:
         """Bounded observation-driven decision/execution loop.
 
@@ -642,6 +657,8 @@ class Brain:
             cycles_used += 1
 
             # ── Reason / Plan ──
+            if on_progress:
+                on_progress("Planning...")
             plan = self._reason(context)
             if plan is None:
                 return context.record.to_result()
@@ -670,6 +687,8 @@ class Brain:
             effective_plan = replace(plan, steps=tuple(remaining_steps))
 
             # ── Execute plan steps ──
+            if on_progress:
+                on_progress("Executing...")
             outcome = self._execute_plan(context, effective_plan, user_request, completed_signatures)
 
             if outcome == _StepOutcome.AWAITING_APPROVAL:
@@ -1109,18 +1128,66 @@ class Brain:
 
         return False, f"unknown verification status: {v_res.status}"
 
+    # Intents whose output is transient — not persisted as durable memory.
+    _TRANSIENT_INTENTS: frozenset[str] = frozenset({
+        "list_directory", "list_dir", "read_file", "system_info",
+        "sys_info", "gpu_info", "screenshot", "take_screenshot",
+        "capture_screen", "region_screenshot", "ocr", "read_screen",
+        "region_ocr", "visual_understanding", "get_foreground_window",
+        "foreground_window", "active_window", "get_window_title",
+        "window_title", "find_window", "read_clipboard", "get_clipboard",
+        "web_search", "list_emails", "list_events", "list_conversations",
+        "search_emails", "search_events", "search_conversations",
+        "read_email", "read_messages", "get_event",
+        "project_info", "explain_architecture", "find_problems",
+        "relevant_files", "git_context", "project_git_status",
+    })
+
+    # Mutating intents whose outcomes ARE worth persisting.
+    _MUTATING_INTENTS: frozenset[str] = frozenset({
+        "write_file", "create_file", "create_directory", "create_dir",
+        "mkdir", "delete", "delete_file", "delete_directory", "remove",
+        "execute_command", "run_command",
+        "remember", "store_memory", "save_memory",
+        "send_email", "reply_email", "send_message", "reply_message",
+        "create_event", "modify_event", "cancel_event",
+    })
+
     def _update_memory(
         self, context: ExecutionContext, user_request: UserRequest,
     ) -> None:
-        """Store execution outcome in memory. Failures are silently absorbed."""
+        """Store genuinely durable execution outcomes in memory.
+
+        Transient tool output (directory listings, file reads, screenshots,
+        system queries, search results) is NOT persisted.  Only durable
+        information is stored: explicit user memories, preferences,
+        project decisions, and mutating action outcomes.
+
+        Failures are silently absorbed.
+        """
         if self.memory is None and self._memory_manager is None:
             return
 
-        # Conservative: do not persist arbitrary sensitive screen interpretations.
+        # Do not persist screen interpretations or items explicitly excluded.
         last = context.observations[-1] if context.observations else None
         if last is not None:
             action = str(last.metadata.get("action") or "")
             if action == "visual_understanding" or last.metadata.get("persist_memory") is False:
+                return
+
+        # Check if the execution plan was entirely transient read/inspection.
+        plan = context.record.plan
+        if plan is not None and plan.steps:
+            # If all executed steps are purely transient reads (e.g. list_dir, read_file, sys_info), skip memory.
+            all_transient = all(
+                s.intent.strip().lower() in self._TRANSIENT_INTENTS
+                for s in plan.steps
+            )
+            if all_transient and not (
+                (last is not None and last.metadata.get("durable_memory") is True)
+                or (last is not None and last.metadata.get("persist_memory") is True)
+                or user_request.metadata.get("durable_memory") is True
+            ):
                 return
 
         try:

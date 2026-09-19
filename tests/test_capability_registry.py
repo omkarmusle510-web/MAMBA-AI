@@ -341,3 +341,43 @@ def test_analyze_skill_build_prompt_detects_single_sentence():
     prompt = _build_analyze_prompt(skill_input)
     assert "Formatting Constraints:" in prompt
     assert "- Deliver the response in a single sentence." in prompt
+
+
+def test_analyze_skill_build_prompt_includes_prior_turn_and_context():
+    """Verify _build_analyze_prompt includes prior conversation turn, active entities, and retrieved memory."""
+    req = UserRequest(
+        goal="What did you find?",
+        metadata={
+            "prior_turn": {
+                "goal": "Scan project for errors",
+                "output": "Found 2 syntax warnings in test_app.py",
+            },
+            "active_entities": {
+                "file": "test_app.py",
+                "repository": "mamba",
+            },
+            "retrieved_memories": [
+                "User prefers concise explanations",
+            ],
+        },
+    )
+    skill_input = SkillInput(
+        task_input=TaskInput(
+            step_id="s-3",
+            execution_id="e-3",
+            description="Answer user query about findings",
+            intent="respond",
+            step_metadata={},
+            goal="What did you find?",
+        ),
+        context=ExecutionContext.from_request(req),
+    )
+
+    prompt = _build_analyze_prompt(skill_input)
+    assert "Prior conversation turn:" in prompt
+    assert "User asked: Scan project for errors" in prompt
+    assert "Found 2 syntax warnings in test_app.py" in prompt
+    assert "Active context entities:" in prompt
+    assert "- file: test_app.py" in prompt
+    assert "Relevant memory: User prefers concise explanations" in prompt
+

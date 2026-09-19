@@ -127,6 +127,33 @@ def _build_analyze_prompt(input: SkillInput) -> str:
         if obs_lines:
             parts.append("Previous step observations:\n" + "\n".join(obs_lines))
 
+    # Include prior turn context for multi-turn conversational questions
+    # (e.g. "What did you find?", "Explain the results", "What were the errors?")
+    if context and context.request and context.request.metadata:
+        req_meta = context.request.metadata
+        prior = req_meta.get("prior_turn")
+        if prior:
+            prev_goal = prior.get("goal")
+            prev_out = prior.get("output") or prior.get("last_observation")
+            if prev_goal and prev_out:
+                parts.append(
+                    f"Prior conversation turn:\n"
+                    f"- User asked: {prev_goal}\n"
+                    f"- Result: {str(prev_out)[:2000]}"
+                )
+
+        # Include active entities so the model knows the current working context
+        entities = req_meta.get("active_entities")
+        if entities:
+            entity_lines = [f"- {k}: {v}" for k, v in entities.items() if v]
+            if entity_lines:
+                parts.append("Active context entities:\n" + "\n".join(entity_lines))
+
+        # Include retrieved memories for informed reasoning
+        memories = req_meta.get("retrieved_memories")
+        if memories:
+            parts.append(f"Relevant memory: {'; '.join(str(m) for m in memories[:5])}")
+
     return "\n\n".join(parts)
 
 

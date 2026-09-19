@@ -137,6 +137,34 @@ class TestVoiceInterface:
         mock_tts.synthesize.assert_called_once_with("I can do that for you.")
         mock_player.play.assert_called_once_with(b"mp3_audio_bytes")
 
+    def test_end_to_end_voice_with_canonical_runtime(self) -> None:
+        from core.runtime import MambaRuntime
+
+        mock_brain = MockBrain("Voice response through runtime.")
+        runtime = MambaRuntime(brain=mock_brain)  # type: ignore
+        mock_stt = MagicMock()
+        mock_stt.transcribe.return_value = "What is the date?"
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b"audio"
+        mock_player = MagicMock()
+
+        voice = VoiceInterface(
+            runtime,
+            stt=mock_stt,
+            tts=mock_tts,
+            player=mock_player,
+        )
+
+        assert voice.runtime is runtime
+        assert voice.brain is mock_brain
+
+        dummy_audio = _make_dummy_wav()
+        prompt, result = voice.process_voice_input(dummy_audio)
+
+        assert prompt == "What is the date?"
+        assert mock_brain.last_request == "What is the date?"
+        assert result.status == ResultStatus.COMPLETED
+
     def test_empty_speech_handled_cleanly(self) -> None:
         mock_brain = MockBrain()
         mock_stt = MagicMock()

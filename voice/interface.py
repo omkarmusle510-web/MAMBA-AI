@@ -25,14 +25,25 @@ class VoiceInterface:
 
     def __init__(
         self,
-        brain: Brain,
+        runtime_or_brain: Any = None,
         *,
+        brain: Brain | Any | None = None,
         stt: STTProvider | None = None,
         tts: TTSProvider | None = None,
         capture: AudioCapture | None = None,
         player: AudioPlayer | None = None,
     ) -> None:
-        self._brain = brain
+        target = runtime_or_brain if runtime_or_brain is not None else brain
+        if target is None:
+            raise ValueError("Either runtime or brain must be provided to VoiceInterface")
+
+        # Accept either canonical MambaRuntime or Brain directly
+        if hasattr(target, "brain"):
+            self._runtime = target
+            self._brain = target.brain
+        else:
+            self._runtime = None
+            self._brain = target
         self._stt = stt or GroqSTTProvider()
         self._tts = tts or CloudflareTTSProvider()
         self._capture = capture or MicrophoneCapture()
@@ -42,6 +53,10 @@ class VoiceInterface:
     @property
     def brain(self) -> Brain:
         return self._brain
+
+    @property
+    def runtime(self) -> Any:
+        return self._runtime
 
     @property
     def stt(self) -> STTProvider:
@@ -84,8 +99,11 @@ class VoiceInterface:
 
         print(f"\nmamba (voice)> {clean_transcript}")
 
-        # 2. Execute through existing Mamba Core
-        result = self._brain.run(clean_transcript)
+        # 2. Execute through canonical Mamba Runtime / Brain
+        if self._runtime is not None:
+            result = self._runtime.run(clean_transcript)
+        else:
+            result = self._brain.run(clean_transcript)
 
         # 3. Format response for user
         text_to_speak = self._extract_speech_text(result)
@@ -203,6 +221,18 @@ class VoiceInterface:
 
     def _display_result(self, result: ExecutionResult) -> None:
         """Print result to stdout matching app.py display conventions."""
+        # Detect pending approval prompt — show cleanly, not as error
+        is_approval = any(
+            obs.metadata.get("awaiting_approval") for obs in result.observations
+        )
+
+        if is_approval:
+            print("\n[Confirmation Required]")
+            if result.output:
+                print(result.output.strip())
+            print()
+            return
+
         print(f"\n[Status: {result.status.value}]")
         if result.status == ResultStatus.COMPLETED:
             if result.output:
@@ -211,11 +241,9 @@ class VoiceInterface:
                 for obs in result.observations:
                     print(obs.content.strip())
         else:
-            if result.output and ("requires user confirmation" in result.output.lower() or "requires user approval" in result.output.lower()):
+            if result.output:
                 print(result.output.strip())
             elif result.error:
                 print(f"Error: {result.error}")
-            elif result.output:
-                print(result.output.strip())
         print()
 

@@ -622,3 +622,46 @@ def test_centralized_stopwords():
     assert "about" in canonical_sw
 
 
+# 22. Brain _update_memory filtering verification
+def test_brain_transient_intents_not_persisted_to_memory(tmp_path: Path):
+    """Verify transient tool outputs (list_dir, read_file, system_info) are not stored in memory, while durable actions are."""
+    from core.brain import Brain
+    from core.context import ExecutionContext
+    from core.types import ExecutionPlan, PlanStep, UserRequest, Observation
+    from memory.persistent import PersistentStore
+    from unittest.mock import MagicMock
+
+    db_path = tmp_path / "filtered_mem.db"
+    store = PersistentStore(db_path=db_path)
+
+    brain = Brain(
+        planner=MagicMock(),
+        executor=MagicMock(),
+        memory=store,
+    )
+
+    # 1. Transient read intent (list_dir)
+    req1 = UserRequest(goal="List files in current directory")
+    ctx1 = ExecutionContext.from_request(req1)
+    plan1 = ExecutionPlan(steps=(PlanStep(description="List directory", intent="list_dir"),))
+    ctx1.attach_plan(plan1)
+    ctx1.add_observation(Observation(step_id=plan1.steps[0].id, content="file1.txt\nfile2.txt", success=True))
+
+    brain._update_memory(ctx1, req1)
+    from memory.types import MemoryQuery
+    assert len(store.retrieve(MemoryQuery()).entries) == 0
+
+    # 2. Mutating durable intent (write_file)
+    req2 = UserRequest(goal="Create a new config file")
+    ctx2 = ExecutionContext.from_request(req2)
+    plan2 = ExecutionPlan(steps=(PlanStep(description="Write config", intent="write_file"),))
+    ctx2.attach_plan(plan2)
+    ctx2.add_observation(Observation(step_id=plan2.steps[0].id, content="Configuration saved", success=True))
+
+    brain._update_memory(ctx2, req2)
+    entries = store.retrieve(MemoryQuery()).entries
+    assert len(entries) == 1
+    assert "Create a new config file" in entries[0].content
+
+
+
