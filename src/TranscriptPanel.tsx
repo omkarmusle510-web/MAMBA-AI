@@ -151,18 +151,7 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
     // For now, parent component manages this; we can expose a callback if needed.
   };
 
-  // Emit ambient emotion lighting if enabled (legacy)
-  useEffect(() => {
-    if (entries.length > 0) {
-      const latest = entries[entries.length - 1];
-      if (latest.role === "model" && latest.emotion && latest.emotion !== "idle") {
-        console.log(
-          `[${new Date().toISOString()}] EMOTION AMBIANCE: Legacy Emotion 1.0 Ambient lighting triggered for emotion: ${latest.emotion}`
-        );
-      }
-    }
-  }, [entries]);
-
+  // Sync entries
   if (!isOpen) return null;
 
   return (

@@ -1,6 +1,6 @@
 import fs from "fs/promises";
-import { Reminder } from "./src/lib/reminderTypes";
-import { dataFile } from "./server_paths";
+import { Reminder } from "./src/reminderTypes";
+import { dataFile } from "./server_path";
 
 const REMINDERS_FILE = dataFile("reminders.json");
 

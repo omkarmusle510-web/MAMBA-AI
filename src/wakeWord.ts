@@ -59,10 +59,10 @@ export interface WakeWordOptions {
   onState?: (state: WakeWordState) => void;
 }
 
-export class ElysiaWakeWordDetector {
+export class MambaWakeWordDetector {
   private recognition: SpeechRecognitionLike | null = null;
   private ctor: SpeechRecognitionCtor | null;
-  private phrase = "hey elysia";
+  private phrase = "hey mamba";
   private sensitivity = 60;
   private onTriggered: (() => void) | null = null;
   private onState: ((s: WakeWordState) => void) | null = null;
@@ -94,7 +94,7 @@ export class ElysiaWakeWordDetector {
       this.setState("error");
       return false;
     }
-    this.phrase = (opts.phrase || "hey elysia").toLowerCase().trim();
+    this.phrase = (opts.phrase || "hey mamba").toLowerCase().trim();
     this.sensitivity = opts.sensitivity ?? this.sensitivity;
     this.onTriggered = opts.onTriggered ?? null;
     this.onState = opts.onState ?? null;
@@ -119,7 +119,7 @@ export class ElysiaWakeWordDetector {
 
   /** Change the wake phrase live without a full restart. */
   setPhrase(phrase: string): void {
-    this.phrase = (phrase || "hey elysia").toLowerCase().trim();
+    this.phrase = (phrase || "hey mamba").toLowerCase().trim();
   }
 
   /** Change sensitivity live. */
@@ -262,3 +262,5 @@ export class ElysiaWakeWordDetector {
     return this.active;
   }
 }
+
+export { MambaWakeWordDetector as ElysiaWakeWordDetector };

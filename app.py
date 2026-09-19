@@ -152,6 +152,24 @@ def main() -> None:
         print(f"Failed to initialize Mamba: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # Server / Web transport mode
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("--server", "-s", "--web", "server", "web"):
+        import uvicorn
+        from api.server import create_app
+        from voice import VoiceInterface
+
+        voice_interface = None
+        try:
+            voice_interface = VoiceInterface(runtime)
+        except Exception:
+            pass
+
+        server_app = create_app(runtime, voice_interface=voice_interface)
+        port = int(os.environ.get("MAMBA_PORT", "8000"))
+        print(f"Starting Mamba Transport Adapter on http://127.0.0.1:{port} ...")
+        uvicorn.run(server_app, host="127.0.0.1", port=port)
+        return
+
     # Voice interface mode
     if len(sys.argv) > 1 and sys.argv[1].lower() in ("--voice", "-v", "voice"):
         from voice import VoiceInterface

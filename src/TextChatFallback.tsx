@@ -58,39 +58,16 @@ export const TextChatFallback: React.FC<TextFallbackProps> = ({
   };
 
   const handleSubmit = async () => {
-    if (!message.trim() || isProcessing) return;
-    
-    // Emergency response logic
-    if (handleEmergencyCommand(message)) {
-      setIsProcessing(true);
-      onMessageSubmit(message);
-      console.log(`[${new Date().toISOString()}] EMERGENCY TEXT FALLBACK: Urgent command detected: "${message}"`);
-      // Reconnect voice after emergency text
-      setTimeout(() => {
-        setIsProcessing(false);
-        onClose();
-      }, 2000);
-      return;
-    }
-    
+    const trimmed = message.trim();
+    if (!trimmed || isProcessing) return;
+
     setIsProcessing(true);
-    
-    // Forward to core text fallback system
-    onMessageSubmit(message);
-    
-    // Log to system console for transcript integration
-    console.log(`[${new Date().toISOString()}] TEXT FALLBACK MODE: User input processed: "${message}"`);
-    
-    // Record output for transcript
-    const output = `[TEXT FALLBACK RESPONSE] Processed: "${message}"`;
-    lastOutputRef.current = output;
-    
-    // Re-enable voice after successful text fallback
+    onMessageSubmit(trimmed);
+    setMessage("");
+
     setTimeout(() => {
       setIsProcessing(false);
-    }, 1000);
-    
-    setMessage("");
+    }, 500);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

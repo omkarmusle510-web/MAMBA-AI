@@ -69,16 +69,14 @@ export const SudoPopup: React.FC<SudoPopupProps> = ({
 
   const handleApprove = () => {
     if (selectedRequest && onApprove) {
-      const token = Math.random().toString(36).substring(2, 10);
-      onApprove(token);
+      onApprove(selectedRequest.id);
     }
     setSelectedRequest(null);
   };
 
   const handleReject = () => {
     if (selectedRequest && onReject) {
-      const token = Math.random().toString(36).substring(2, 10);
-      onReject(token);
+      onReject(selectedRequest.id);
     }
     setSelectedRequest(null);
   };

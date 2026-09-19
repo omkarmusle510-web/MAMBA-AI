@@ -16,8 +16,9 @@
 import fs from "fs";
 import path from "path";
 
-/** Writable per-user data directory. Falls back to cwd in development. */
-export const DATA_DIR: string = process.env.ELYSIA_DATA_DIR || process.cwd();
+/** Writable per-user data directory. Defaults to .mamba in the workspace root. */
+export const DATA_DIR: string =
+  process.env.MAMBA_DATA_DIR || path.join(process.cwd(), ".mamba");
 
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -31,33 +32,21 @@ export function dataFile(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Gemini API key store (secrets.json in the data dir).
+// Environment & API Keys — Mamba uses standard environment variables (.env)
 // ---------------------------------------------------------------------------
-const SECRETS_FILE = dataFile("secrets.json");
-
-interface Secrets {
-  geminiApiKey?: string;
-}
-
-function readSecrets(): Secrets {
-  try {
-    if (fs.existsSync(SECRETS_FILE)) {
-      return JSON.parse(fs.readFileSync(SECRETS_FILE, "utf-8")) as Secrets;
-    }
-  } catch {
-    /* corrupt — treat as empty */
-  }
-  return {};
-}
 
 /**
- * Resolve the active Gemini API key from environment (.env).
+ * Resolve the active Gemini / Google API key from environment.
  */
 export function getGeminiApiKey(): string | undefined {
-  return process.env.GEMINI_API_KEY?.trim() || undefined;
+  return (
+    process.env.GEMINI_API_KEY?.trim() ||
+    process.env.GOOGLE_API_KEY?.trim() ||
+    undefined
+  );
 }
 
-/** Whether any usable key is configured (without revealing it). */
+/** Whether any usable key is configured. */
 export function hasGeminiApiKey(): boolean {
   return Boolean(getGeminiApiKey());
 }

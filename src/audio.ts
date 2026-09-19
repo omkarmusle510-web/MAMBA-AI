@@ -9,7 +9,15 @@
  * - Input & Output AnalyserNodes for real-time waveform visuals.
  */
 
-export type LiveState = "disconnected" | "connecting" | "listening" | "speaking";
+export type LiveState =
+  | "disconnected"
+  | "connecting"
+  | "idle"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "permission"
+  | "error";
 
 // PCM Conversion Helper: converts Float32Array [-1.0, 1.0] to signed Int16 Raw PCM Little Endian
 function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
@@ -59,7 +67,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-export class ElysiaAudioSession {
+export class MambaAudioSession {
   private ws: WebSocket | null = null;
   
   // Audios contexts (separate to match exact required sample rates)
@@ -83,8 +91,10 @@ export class ElysiaAudioSession {
   // State Callbacks
   private onStateChange: (state: LiveState) => void;
   private onTranscription: (role: "user" | "model", text: string) => void;
-  private onToolCall: (name: string, args: any, callback: (result: any) => void) => void;
+  private onToolCall?: (name: string, args: any, callback: (result: any) => void) => void;
   private onError: (error: string) => void;
+  private onProgress?: (milestone: string) => void;
+  private onPermissionRequest?: (command: string, reason: string) => void;
   private onMemorySync?: (memories: any[]) => void;
   private onReminder?: (text: string, id: string) => void;
   private onTerminalOutput?: (tool: string, args: any, output: string) => void;
@@ -116,8 +126,10 @@ export class ElysiaAudioSession {
   constructor(handlers: {
     onStateChange: (state: LiveState) => void;
     onTranscription: (role: "user" | "model", text: string) => void;
-    onToolCall: (name: string, args: any, callback: (result: any) => void) => void;
+    onToolCall?: (name: string, args: any, callback: (result: any) => void) => void;
     onError: (error: string) => void;
+    onProgress?: (milestone: string) => void;
+    onPermissionRequest?: (command: string, reason: string) => void;
     onMemorySync?: (memories: any[]) => void;
     onReminder?: (text: string, id: string) => void;
     onTerminalOutput?: (tool: string, args: any, output: string) => void;
@@ -126,9 +138,23 @@ export class ElysiaAudioSession {
     this.onTranscription = handlers.onTranscription;
     this.onToolCall = handlers.onToolCall;
     this.onError = handlers.onError;
+    this.onProgress = handlers.onProgress;
+    this.onPermissionRequest = handlers.onPermissionRequest;
     this.onMemorySync = handlers.onMemorySync;
     this.onReminder = handlers.onReminder;
     this.onTerminalOutput = handlers.onTerminalOutput;
+  }
+
+  public sendText(text: string): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "text", text }));
+    }
+  }
+
+  public sendPermissionResponse(approved: boolean): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "text", text: approved ? "yes" : "no" }));
+    }
   }
 
   private setState(state: LiveState) {
@@ -278,14 +304,28 @@ export class ElysiaAudioSession {
 
           // Handle server-side states
           if (data.type === "status") {
-            console.log("[Elysia WS Status]:", data.status);
-            if (data.status === "connecting_gemini") {
-              // Wait for Gemini Live connection
-            } else if (data.status === "connected") {
+            console.log("[Mamba WS Status]:", data.status);
+            if (data.status === "connected") {
               this.setState("listening");
+            } else if (data.status === "listening" || data.status === "thinking" || data.status === "speaking" || data.status === "permission" || data.status === "idle") {
+              this.setState(data.status);
             } else if (data.status === "session_closed") {
               this.disconnect();
             }
+            return;
+          }
+
+          // Handle progress milestones (Understanding..., Planning..., Executing...)
+          if (data.type === "progress" && data.milestone) {
+            this.setState("thinking");
+            this.onProgress?.(data.milestone);
+            return;
+          }
+
+          // Handle permission confirmation request from Mamba Core
+          if (data.type === "permission_request") {
+            this.setState("permission");
+            this.onPermissionRequest?.(data.command || "", data.reason || "");
             return;
           }
 
@@ -294,16 +334,15 @@ export class ElysiaAudioSession {
             this.playAudioPCMChunk(data.audio);
           }
 
-          // Handle interruption signal (e.g. user talked over Elysia)
+          // Handle interruption signal
           if (data.type === "interrupted") {
             this.handleInterruption();
           }
 
           // Turn complete
           if (data.type === "turnComplete") {
-            // Once Elysia completes speaking, change visual state back to listening
             setTimeout(() => {
-              if (this.activeSources.length === 0 && this.currentState === "speaking") {
+              if (this.activeSources.length === 0 && (this.currentState === "speaking" || this.currentState === "thinking")) {
                 this.setState("listening");
               }
             }, 100);
@@ -507,3 +546,5 @@ export class ElysiaAudioSession {
     this.outputGainNode = null;
   }
 }
+
+export { MambaAudioSession as ElysiaAudioSession };

@@ -3,6 +3,7 @@
 from .application import MambaApplication
 from .errors import APIError, APIExecutionError, InvalidAPIRequestError
 from .protocols import Application
+from .server import create_app
 from .types import APIRequest, APIResponse
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "Application",
     "InvalidAPIRequestError",
     "MambaApplication",
+    "create_app",
 ]

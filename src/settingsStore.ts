@@ -10,12 +10,12 @@
  * No Context/Zustand — this is deliberately lightweight to match audio.ts/memoryTypes.ts.
  */
 
-export interface ElysiaSettings {
-  /** Launch ELYSIA (backends + browser tab) silently on Windows login. */
+export interface MambaSettings {
+  /** Launch Mamba silently on system login. */
   autoStart: boolean;
   /** Enable the always-listening wake-word detector. */
   wakeWordEnabled: boolean;
-  /** Phrase that activates ELYSIA (case-insensitive substring match). */
+  /** Phrase that activates Mamba (case-insensitive substring match). */
   wakePhrase: string;
   /** Preferred microphone device id ("" = system default). */
   micDeviceId: string;
@@ -23,40 +23,32 @@ export interface ElysiaSettings {
   sensitivity: number;
   /** Master toggle for UI animations. */
   animations: boolean;
-  /** Selected Gemini Live voice name. */
+  /** Selected voice name. */
   voice: string;
-  /** Selected background video filename. */
+  /** Background theme style. */
   backgroundVideo: string;
-  /** Avatar style ("character" or "orb"). */
-  avatarStyle: "character" | "orb";
+  /** Presence visual style ("orb", "pulse", or "character"). */
+  avatarStyle: "character" | "orb" | "pulse";
 }
 
-export const GEMINI_VOICES = [
-  { id: "Aoede", label: "Aoede (Default)", desc: "Warm and natural" },
-  { id: "Charon", label: "Charon", desc: "Deep and authoritative" },
-  { id: "Fenrir", label: "Fenrir", desc: "Bold and confident" },
-  { id: "Kore", label: "Kore", desc: "Soft and gentle" },
-  { id: "Leda", label: "Leda", desc: "Calm and composed" },
-  { id: "Puck", label: "Puck", desc: "Energetic and playful" },
-  { id: "Zephyr", label: "Zephyr", desc: "Light and breezy" },
-] as const;
+export type ElysiaSettings = MambaSettings;
 
-export const DEFAULT_SETTINGS: ElysiaSettings = {
+export const DEFAULT_SETTINGS: MambaSettings = {
   autoStart: false,
-  wakeWordEnabled: false,
-  wakePhrase: "hey elysia",
+  wakeWordEnabled: true,
+  wakePhrase: "hey mamba",
   micDeviceId: "",
   sensitivity: 60,
   animations: true,
-  voice: "Charon",
+  voice: "default",
   backgroundVideo: "solid",
-  avatarStyle: "orb",
+  avatarStyle: "pulse",
 };
 
-const STORAGE_KEY = "elysia.settings.v2";
+const STORAGE_KEY = "mamba.settings.v1";
 
 /** Settings keys that the browser should never persist (security). */
-const NEVER_PERSIST: ReadonlySet<keyof ElysiaSettings> = new Set([]);
+const NEVER_PERSIST: ReadonlySet<keyof MambaSettings> = new Set([]);
 
 /**
  * Load settings from localStorage, merged over defaults so new keys always
