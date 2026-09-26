@@ -51,27 +51,15 @@ export function hasGeminiApiKey(): boolean {
   return Boolean(getGeminiApiKey());
 }
 
-/** Persist a user-supplied key to the per-user secrets file. */
+/** Set the active Gemini API key in process environment. */
 export function setGeminiApiKey(key: string): void {
   const trimmed = (key || "").trim();
   if (!trimmed) throw new Error("API key must not be empty.");
-  const current = readSecrets();
-  current.geminiApiKey = trimmed;
-  fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
-  try {
-    fs.chmodSync(SECRETS_FILE, 0o600); // owner-only where supported
-  } catch {
-    /* Windows ACLs differ; best-effort */
-  }
+  process.env.GEMINI_API_KEY = trimmed;
 }
 
-/** Remove the stored key (used by "reset"/sign-out flows). */
+/** Remove the stored key from process environment. */
 export function clearGeminiApiKey(): void {
-  const current = readSecrets();
-  delete current.geminiApiKey;
-  try {
-    fs.writeFileSync(SECRETS_FILE, JSON.stringify(current, null, 2), "utf-8");
-  } catch {
-    /* best-effort */
-  }
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GOOGLE_API_KEY;
 }

@@ -377,17 +377,19 @@ export class MambaAudioSession {
           // Handle Tool Calling
           if (data.type === "toolCall") {
             const { callId, name, args } = data;
-            this.onToolCall(name, args, (result) => {
-              // Send back execution result to server bridge
-              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({
-                  type: "toolResponse",
-                  id: callId,
-                  name: name,
-                  output: result
-                }));
-              }
-            });
+            if (this.onToolCall) {
+              this.onToolCall(name, args, (result) => {
+                // Send back execution result to server bridge
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                  this.ws.send(JSON.stringify({
+                    type: "toolResponse",
+                    id: callId,
+                    name: name,
+                    output: result
+                  }));
+                }
+              });
+            }
           }
 
         } catch (parseError) {

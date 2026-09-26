@@ -221,33 +221,6 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     }
   }, [activeTabId, activeTab?.url]);
 
-  // Read Playwright Local server status on a loop to support the local headed helper if active
-  useEffect(() => {
-    let isMounted = true;
-    const fetchStatus = async () => {
-      try {
-        const res = await fetch("http://localhost:3001/api/status", { mode: "cors" });
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setIsLocalConnected(true);
-          if (data.logs && Array.isArray(data.logs)) {
-            setLocalLogs(data.logs);
-          }
-        }
-      } catch (err) {
-        if (isMounted) {
-          setIsLocalConnected(false);
-        }
-      }
-    };
-
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 3500);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, []);
 
   // Set hook error context on iframe document
   useEffect(() => {

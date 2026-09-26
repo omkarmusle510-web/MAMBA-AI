@@ -207,8 +207,10 @@ export const MambaApp: React.FC = () => {
       <div className="flex-1 flex items-center justify-center z-10">
         <MambaPresence
           state={presenceState}
-          variant="pulse"
-          size={200}
+          variant="orb"
+          size={260}
+          inputNode={audioSessionRef.current?.inputAnalyser}
+          outputNode={audioSessionRef.current?.outputAnalyser}
           onClick={() => {
             if (liveState === "listening") {
               setLiveState("idle");

@@ -37,3 +37,7 @@ Thumbs.db
 data/
 *.db
 *.sqlite3
+
+node_modules/
+dist/
+

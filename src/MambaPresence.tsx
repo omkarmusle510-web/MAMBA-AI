@@ -1,6 +1,7 @@
 import React from "react";
 import { motion } from "motion/react";
 import { ShieldAlert, AlertTriangle } from "lucide-react";
+import { OrbView } from "./orb/OrbView";
 
 export type MambaPresenceState =
   | "idle"
@@ -10,22 +11,26 @@ export type MambaPresenceState =
   | "permission"
   | "error";
 
-interface MambaPresenceProps {
+export interface MambaPresenceProps {
   state: MambaPresenceState;
-  variant?: "pulse" | "orb" | "circle";
+  variant?: "orb" | "pulse" | "circle";
   onClick?: () => void;
   size?: number;
   label?: string;
   className?: string;
+  inputNode?: AudioNode | AnalyserNode | null;
+  outputNode?: AudioNode | AnalyserNode | null;
 }
 
 export const MambaPresence: React.FC<MambaPresenceProps> = ({
   state = "idle",
-  variant = "pulse",
+  variant = "orb",
   onClick,
-  size = 180,
+  size = 220,
   label,
   className = "",
+  inputNode,
+  outputNode,
 }) => {
   // Color palettes per state
   const config = {
@@ -90,10 +95,10 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
       >
         {/* Outermost ambient glow */}
         <motion.div
-          className="absolute inset-0 rounded-full blur-2xl pointer-events-none"
+          className="absolute inset-0 rounded-full blur-3xl pointer-events-none"
           style={{ background: config.glow }}
           animate={{
-            scale: state === "listening" ? [1, 1.25, 1] : state === "thinking" ? [1, 1.15, 1] : [1, 1.08, 1],
+            scale: state === "listening" ? [1, 1.3, 1] : state === "thinking" ? [1, 1.2, 1] : [1, 1.08, 1],
             opacity: state === "listening" ? [0.6, 0.9, 0.6] : [0.3, 0.6, 0.3],
           }}
           transition={{
@@ -103,46 +108,67 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
           }}
         />
 
-        {/* Pulse / Ring Visual Representation */}
-        <motion.div
-          className={`absolute rounded-full border ${config.ring}`}
-          style={{
-            width: size * 0.88,
-            height: size * 0.88,
-            background: `radial-gradient(circle, ${config.inner} 0%, ${config.outer} 70%, transparent 100%)`,
-          }}
-          animate={{
-            scale: state === "speaking" ? [0.95, 1.05, 0.95] : state === "thinking" ? [0.98, 1.02, 0.98] : 1,
-            rotate: state === "thinking" ? 360 : 0,
-          }}
-          transition={{
-            duration: state === "thinking" ? 3 : 1.5,
-            repeat: Infinity,
-            ease: state === "thinking" ? "linear" : "easeInOut",
-          }}
-        >
-          {/* Inner core node */}
-          <div className="w-full h-full rounded-full flex items-center justify-center backdrop-blur-sm">
-            {state === "permission" ? (
-              <ShieldAlert className="w-10 h-10 text-amber-300 animate-pulse" />
-            ) : state === "error" ? (
-              <AlertTriangle className="w-10 h-10 text-rose-300" />
-            ) : (
-              <motion.div
-                className="w-12 h-12 rounded-full bg-white/20 border border-white/40 shadow-inner"
-                animate={{
-                  scale: state === "listening" ? [1, 1.3, 1] : [1, 1.1, 1],
-                  opacity: state === "idle" ? [0.5, 0.8, 0.5] : [0.8, 1, 0.8],
-                }}
-                transition={{
-                  duration: state === "listening" ? 1.4 : 3,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
-              />
+        {variant === "orb" ? (
+          <div className="relative z-10 flex items-center justify-center">
+            <OrbView
+              state={state}
+              inputNode={inputNode}
+              outputNode={outputNode}
+              size={size}
+            />
+            {state === "permission" && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <ShieldAlert className="w-12 h-12 text-amber-400 drop-shadow-[0_0_15px_rgba(245,158,11,0.8)] animate-pulse" />
+              </div>
+            )}
+            {state === "error" && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <AlertTriangle className="w-12 h-12 text-rose-400 drop-shadow-[0_0_15px_rgba(244,63,94,0.8)] animate-bounce" />
+              </div>
             )}
           </div>
-        </motion.div>
+        ) : (
+          /* Pulse / Ring Visual Representation */
+          <motion.div
+            className={`absolute rounded-full border ${config.ring}`}
+            style={{
+              width: size * 0.88,
+              height: size * 0.88,
+              background: `radial-gradient(circle, ${config.inner} 0%, ${config.outer} 70%, transparent 100%)`,
+            }}
+            animate={{
+              scale: state === "speaking" ? [0.95, 1.05, 0.95] : state === "thinking" ? [0.98, 1.02, 0.98] : 1,
+              rotate: state === "thinking" ? 360 : 0,
+            }}
+            transition={{
+              duration: state === "thinking" ? 3 : 1.5,
+              repeat: Infinity,
+              ease: state === "thinking" ? "linear" : "easeInOut",
+            }}
+          >
+            {/* Inner core node */}
+            <div className="w-full h-full rounded-full flex items-center justify-center backdrop-blur-sm">
+              {state === "permission" ? (
+                <ShieldAlert className="w-10 h-10 text-amber-300 animate-pulse" />
+              ) : state === "error" ? (
+                <AlertTriangle className="w-10 h-10 text-rose-300" />
+              ) : (
+                <motion.div
+                  className="w-12 h-12 rounded-full bg-white/20 border border-white/40 shadow-inner"
+                  animate={{
+                    scale: state === "listening" ? [1, 1.3, 1] : [1, 1.1, 1],
+                    opacity: state === "idle" ? [0.5, 0.8, 0.5] : [0.8, 1, 0.8],
+                  }}
+                  transition={{
+                    duration: state === "listening" ? 1.4 : 3,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                  }}
+                />
+              )}
+            </div>
+          </motion.div>
+        )}
       </div>
 
       {/* Label & Status */}
