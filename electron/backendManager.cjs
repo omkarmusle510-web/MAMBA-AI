@@ -36,6 +36,7 @@ class BackendManager {
     return new Promise((resolve) => {
       const req = http.get(this.healthUrl, { timeout: timeoutMs }, (res) => {
         if (res.statusCode !== 200) {
+          res.resume();
           resolve(false);
           return;
         }
@@ -98,7 +99,7 @@ class BackendManager {
    * Returns { success: boolean, owned: boolean, url: string }.
    */
   async start(options = {}) {
-    const maxWaitMs = options.maxWaitMs || 25000;
+    const maxWaitMs = options.maxWaitMs || 40000;
     const pollIntervalMs = options.pollIntervalMs || 250;
 
     // 1. Check if backend is already running

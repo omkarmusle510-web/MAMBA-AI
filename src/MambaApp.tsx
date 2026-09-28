@@ -38,6 +38,13 @@ export const MambaApp: React.FC = () => {
   const audioSessionRef = useRef<MambaAudioSession | null>(null);
   const wakeWordRef = useRef<MambaWakeWordDetector | null>(null);
 
+  // Sync liveState to desktop shell (for Floating Orb synchronization)
+  useEffect(() => {
+    if (window.mambaDesktop?.reportState) {
+      window.mambaDesktop.reportState(liveState);
+    }
+  }, [liveState]);
+
   // Initialize session and wake word detector
   useEffect(() => {
     const session = new MambaAudioSession({

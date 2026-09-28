@@ -17,6 +17,7 @@ export interface MambaPresenceProps {
   onClick?: () => void;
   size?: number;
   label?: string;
+  showLabel?: boolean;
   className?: string;
   inputNode?: AudioNode | AnalyserNode | null;
   outputNode?: AudioNode | AnalyserNode | null;
@@ -28,6 +29,7 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
   onClick,
   size = 220,
   label,
+  showLabel = true,
   className = "",
   inputNode,
   outputNode,
@@ -172,14 +174,16 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
       </div>
 
       {/* Label & Status */}
-      <div className="mt-4 text-center">
-        <h2 className="text-sm font-bold font-mono tracking-widest text-slate-200">
-          {label || config.text}
-        </h2>
-        <p className="text-xs font-mono text-slate-400 mt-0.5">
-          {config.subtext}
-        </p>
-      </div>
+      {showLabel && (
+        <div className="mt-4 text-center">
+          <h2 className="text-sm font-bold font-mono tracking-widest text-slate-200">
+            {label || config.text}
+          </h2>
+          <p className="text-xs font-mono text-slate-400 mt-0.5">
+            {config.subtext}
+          </p>
+        </div>
+      )}
     </div>
   );
 };
