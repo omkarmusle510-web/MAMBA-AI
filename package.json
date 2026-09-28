@@ -3,10 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "node electron/run.cjs .",
+    "electron:dev": "node electron/run.cjs . --dev",
+    "electron:test": "node electron/run.cjs . --smoke-test"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -20,8 +24,8 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/three": "^0.176.0",
+    "electron": "^44.4.5",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"
   }
 }
-
