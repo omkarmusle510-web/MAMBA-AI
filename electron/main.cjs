@@ -1,20 +1,29 @@
 /**
- * Mamba Desktop Shell — Main Process (Phase 1)
+ * Mamba Desktop Shell — Main Process
  *
  * Strictly a lifecycle and presentation boundary for Windows desktop.
- * Does NOT contain runtime, planning, permissions, memory, or tool logic.
+ * Integrates:
+ * - Native desktop window
+ * - Windows System Tray (Show, Hide, Quit)
+ * - Global Activation Hotkey (Ctrl + Space)
+ * - Single-instance enforcement
+ * - Python Mamba backend lifecycle management
+ * - Frontend dev/prod resolution
+ *
  * Mamba Core remains the sole source of truth.
  */
 
-const { app, BrowserWindow, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
 const { BackendManager } = require("./backendManager.cjs");
 const { FrontendManager } = require("./frontendManager.cjs");
+const { TrayManager } = require("./trayManager.cjs");
+const { HotkeyManager } = require("./hotkeyManager.cjs");
 
 // Enforce single application instance
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-  console.log("[Mamba Shell] Another instance is already running. Exiting.");
+  console.log("[Mamba Shell] Another instance is already running. Exiting cleanly.");
   app.quit();
   process.exit(0);
 }
@@ -22,7 +31,10 @@ if (!gotTheLock) {
 let mainWindow = null;
 let backendManager = null;
 let frontendManager = null;
+let trayManager = null;
+let hotkeyManager = null;
 let isQuitting = false;
+let isCleanedUp = false;
 
 const isDev = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 
@@ -142,7 +154,39 @@ function getErrorHtml(errorMessage) {
 </html>`;
 }
 
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+  mainWindow.focus();
+  console.log("[Mamba Shell] Window shown, restored, and focused.");
+}
+
+function hideWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.hide();
+  console.log("[Mamba Shell] Window hidden to system tray.");
+}
+
+function quitApp() {
+  if (isQuitting) return;
+  console.log("[Mamba Shell] Quit initiated from tray.");
+  isQuitting = true;
+  cleanupProcesses();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.destroy();
+    mainWindow = null;
+  }
+  app.quit();
+}
+
 function createMainWindow() {
+  const iconPath = path.join(__dirname, "assets", "icon.png");
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 750,
@@ -150,6 +194,7 @@ function createMainWindow() {
     minHeight: 600,
     backgroundColor: "#020617",
     title: "Mamba AI",
+    icon: iconPath,
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -164,22 +209,14 @@ function createMainWindow() {
     mainWindow.show();
   });
 
-  mainWindow.webContents.on("did-finish-load", () => {
-    const currentUrl = mainWindow.webContents.getURL();
-    console.log(`[Mamba Shell] Page loaded: ${currentUrl.slice(0, 80)}...`);
-    if (currentUrl.startsWith("http://") || currentUrl.startsWith("https://")) {
-      console.log(`[Mamba Shell] React interface fully loaded into Electron window: ${currentUrl}`);
-      if (process.argv.includes("--smoke-test")) {
-        console.log("[Mamba Shell] Smoke test: React interface loaded. Quitting for automated verification in 3s...");
-        setTimeout(() => {
-          app.quit();
-        }, 3000);
-      }
+  // Intercept window close (X button): hide to tray instead of terminating app
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      console.log("[Mamba Shell] Window close intercepted -> hidden to system tray.");
+      return false;
     }
-  });
-
-  mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[Mamba Shell] Page failed to load: ${validatedURL} (${errorCode}: ${errorDescription})`);
   });
 
   // Handle external link clicks
@@ -188,6 +225,56 @@ function createMainWindow() {
       shell.openExternal(url);
     }
     return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    const currentUrl = mainWindow.webContents.getURL();
+    console.log(`[Mamba Shell] Page loaded: ${currentUrl.slice(0, 80)}...`);
+
+    if (currentUrl.startsWith("http://") || currentUrl.startsWith("https://")) {
+      console.log(`[Mamba Shell] React interface fully loaded into Electron window: ${currentUrl}`);
+
+      if (process.argv.includes("--smoke-test")) {
+        console.log("[Mamba Shell] Smoke test: Page loaded. Running automated validation sequence...");
+        setTimeout(() => {
+          try {
+            // 1. Verify Tray
+            const trayOk = Boolean(trayManager && trayManager.tray);
+            console.log(`[Validation 1] Tray created: ${trayOk}`);
+
+            // 2. Verify Hotkey
+            const hotkeyOk = Boolean(hotkeyManager && hotkeyManager.isRegistered);
+            console.log(`[Validation 2] Hotkey registered: ${hotkeyOk}`);
+
+            // 3. Test Hide Window
+            hideWindow();
+            const isHidden = !mainWindow.isVisible();
+            console.log(`[Validation 3] Hide window to tray: ${isHidden}`);
+
+            // 4. Test Restore / Focus Window
+            showWindow();
+            const isRestored = mainWindow.isVisible();
+            console.log(`[Validation 4] Restore / focus window: ${isRestored}`);
+
+            // 5. Test Close Interception
+            mainWindow.close();
+            const isClosedToTray = !mainWindow.isVisible() && !mainWindow.isDestroyed();
+            console.log(`[Validation 5] Close button intercepts to tray: ${isClosedToTray}`);
+
+            // 6. Test Quit from Tray
+            console.log("[Validation 6] Initiating clean quit via tray menu action...");
+            quitApp();
+          } catch (valErr) {
+            console.error("[Validation Error]", valErr);
+            quitApp();
+          }
+        }, 2000);
+      }
+    }
+  });
+
+  mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[Mamba Shell] Page failed to load: ${validatedURL} (${errorCode}: ${errorDescription})`);
   });
 
   mainWindow.on("closed", () => {
@@ -201,6 +288,22 @@ async function bootApp() {
   // 1. Show splash loader while backend is starting
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(getSplashHtml())}`);
 
+  // 2. Initialize System Tray
+  trayManager = new TrayManager({
+    iconPath: path.join(__dirname, "assets", "icon.png"),
+    onShow: () => showWindow(),
+    onHide: () => hideWindow(),
+    onQuit: () => quitApp(),
+  });
+  trayManager.create();
+
+  // 3. Initialize Global Activation Hotkey (Ctrl + Space)
+  hotkeyManager = new HotkeyManager({
+    shortcut: "CommandOrControl+Space",
+    onActivate: () => showWindow(),
+  });
+  hotkeyManager.register();
+
   backendManager = new BackendManager({
     rootDir: path.resolve(__dirname, ".."),
   });
@@ -211,17 +314,17 @@ async function bootApp() {
   });
 
   try {
-    // 2. Start or connect to Mamba backend
+    // 4. Start or connect to Mamba backend
     console.log("[Mamba Shell] Initializing backend lifecycle...");
     const backendResult = await backendManager.start();
     console.log("[Mamba Shell] Backend ready:", backendResult);
 
-    // 3. Resolve frontend URL (Vite dev server or static server)
+    // 5. Resolve frontend URL (Vite dev server or static server)
     console.log(`[Mamba Shell] Resolving frontend (isDev: ${isDev})...`);
     const { url } = await frontendManager.resolveUrl(isDev);
     console.log(`[Mamba Shell] Loading frontend URL: ${url}`);
 
-    // 4. Expose React interface
+    // 6. Expose React interface
     if (mainWindow && !mainWindow.isDestroyed()) {
       await mainWindow.loadURL(url);
     }
@@ -237,9 +340,19 @@ async function bootApp() {
 
 // Lifecycle cleanup
 function cleanupProcesses() {
-  if (isQuitting) return;
-  isQuitting = true;
-  console.log("[Mamba Shell] Application exiting. Cleaning up processes...");
+  if (isCleanedUp) return;
+  isCleanedUp = true;
+  console.log("[Mamba Shell] Application exiting. Cleaning up processes and system hooks...");
+
+  if (hotkeyManager) {
+    hotkeyManager.unregister();
+    hotkeyManager = null;
+  }
+
+  if (trayManager) {
+    trayManager.destroy();
+    trayManager = null;
+  }
 
   if (frontendManager) {
     frontendManager.stop();
@@ -254,18 +367,19 @@ function cleanupProcesses() {
 
 // Handle second instance activation
 app.on("second-instance", () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  console.log("[Mamba Shell] Secondary instance detected. Restoring and focusing existing window.");
+  showWindow();
 });
 
 app.whenReady().then(bootApp);
 
 app.on("window-all-closed", () => {
-  cleanupProcesses();
-  if (process.platform !== "darwin") {
-    app.quit();
+  // Only quit if explicitly quitting (tray keeps app running when windows hidden)
+  if (isQuitting) {
+    cleanupProcesses();
+    if (process.platform !== "darwin") {
+      app.quit();
+    }
   }
 });
 
