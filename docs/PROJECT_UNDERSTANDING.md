@@ -8,17 +8,19 @@ Mamba features built-in **Project Understanding** capabilities that enable it to
 
 Project Understanding is **not** an external indexing database or code-crawling agent. It is a native, deterministic capability wired into Mamba Core that:
 
-1. **Discovers Local Projects**: Locates project root markers (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `.git`, etc.).
+1. **Discovers Local Projects**: Locates project root markers (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `.git`, etc.) via `core/project.py`.
 2. **Analyzes Architecture**: Identifies project frameworks (FastAPI, React, Django, Next.js, etc.), primary entry points, test suites, and core modules.
 3. **Detects Problems**: Inspects workspace diagnostics, missing dependencies, syntax issues, and failing tests.
 4. **Locates Relevant Files**: Maps user tasks to the most relevant files using token heuristics and project layout context.
-5. **Inspects Git Context**: Evaluates active branch, uncommitted diffs, recent commit logs, and repository status.
+5. **Inspects Git Context**: Evaluates active branch, uncommitted diffs, recent commit logs, and repository status — **read-only** (no commit, push, or merge operations are implemented).
+
+Project discovery runs automatically on every request: the discovered `ProjectContext` (name, root, framework, entry points, `GitState`) is attached to the request metadata as `project_context`, so the planner always reasons with codebase awareness even when you don't ask about the project explicitly.
 
 ---
 
 ## 2. Supported Actions & Skills
 
-Project Understanding exposes five core intents via `skills/project.py`:
+Project Understanding exposes five core intent families via `skills/project.py` (each with several natural-language intent aliases):
 
 | Action | Intent | Description |
 | :--- | :--- | :--- |
@@ -27,6 +29,8 @@ Project Understanding exposes five core intents via `skills/project.py`:
 | `find_problems` | `find_problems` | Summarizes compiler errors, lint issues, test failures, or broken imports. |
 | `relevant_files` | `relevant_files` | Identifies files relevant to a specific feature, bug, or query. |
 | `git_context` | `git_context` | Summarizes current git branch, staged/unstaged changes, and recent commit history. |
+
+All five are registered under the `project_understanding` capability with a read-only contract: analysis and inspection only, no code mutation and no git writes.
 
 ---
 
@@ -59,5 +63,4 @@ mamba> What does the second file do?
 core/runtime.py serves as the canonical application runtime boundary...
 ```
 
-Active entities such as current file, repository, directory, and prior turn outcomes are carried forward in the `ExecutionContext` so you can speak naturally using pronouns (*"it"*, *"that"*, *"the file"*).
-
+Active entities such as current file, repository, directory, and prior turn outcomes are carried forward in the `ExecutionContext` so you can speak naturally using pronouns (*"it"*, *"that"*, *"the file"*). Repository references in goals (e.g. `github.com/<owner>/<repo>`) are also captured as the active repository for follow-up questions.
