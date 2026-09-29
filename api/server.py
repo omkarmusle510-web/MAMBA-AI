@@ -21,8 +21,18 @@ from pydantic import BaseModel
 
 from core.runtime import MambaRuntime
 from core.types import ExecutionResult, ResultStatus, UserRequest
+from voice.errors import VoiceError
 
 log = logging.getLogger("mamba.transport")
+
+# Voice-turn audio limits: WAV-framed utterances only (16-bit PCM container
+# required — the STT provider cannot parse headerless raw PCM).
+_MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024
+
+
+def _looks_like_wav(data: bytes) -> bool:
+    """Minimal RIFF/WAVE header check for inbound voice audio."""
+    return len(data) >= 44 and data[0:4] == b"RIFF" and data[8:12] == b"WAVE"
 
 
 class ChatRequest(BaseModel):
@@ -139,34 +149,6 @@ def create_app(
                 if data.get("type") == "video":
                     continue
 
-                # 2. Incoming text or audio transcription
-                prompt_text: str | None = None
-                if data.get("type") == "text":
-                    prompt_text = str(data.get("text", "")).strip()
-                elif data.get("type") == "audio" and data.get("audio"):
-                    # PCM or base64 audio: transcribe via voice_interface if available
-                    if voice_interface and hasattr(voice_interface, "stt"):
-                        try:
-                            audio_bytes = base64.b64decode(data["audio"])
-                            prompt_text = voice_interface.stt.transcribe(audio_bytes).strip()
-                        except Exception as stt_err:
-                            await websocket.send_json({"type": "error", "error": f"STT failed: {stt_err}"})
-                            continue
-                    else:
-                        await websocket.send_json({"type": "error", "error": "STT not configured on server."})
-                        continue
-
-                if not prompt_text:
-                    continue
-
-                # Send user transcription to UI
-                await websocket.send_json({
-                    "type": "transcription",
-                    "role": "user",
-                    "text": prompt_text,
-                })
-                await websocket.send_json({"type": "status", "status": "thinking"})
-
                 # Execute through canonical MambaRuntime with milestone updates
                 def on_progress_sync(milestone: str) -> None:
                     try:
@@ -180,8 +162,81 @@ def create_app(
                     except Exception:
                         pass
 
-                result = runtime.run(prompt_text, on_progress=on_progress_sync)
+                # 2. Incoming text or voice-turn audio.
+                # Voice turns carry WAV-framed audio (NOT headerless raw PCM)
+                # and are tagged input_modality="voice" so safety policy can
+                # distinguish spoken input from typed input.
+                prompt_text: str | None = None
+                input_modality = "text"
+                result: ExecutionResult | None = None
+                if data.get("type") == "text":
+                    prompt_text = str(data.get("text", "")).strip()
+                elif data.get("type") == "audio" and data.get("audio"):
+                    input_modality = "voice"
+                    if voice_interface is None:
+                        await websocket.send_json({"type": "error", "error": "Voice is not configured on server."})
+                        continue
+                    try:
+                        audio_bytes = base64.b64decode(data["audio"])
+                    except Exception:
+                        await websocket.send_json({"type": "error", "error": "Invalid audio payload."})
+                        continue
+                    if len(audio_bytes) > _MAX_VOICE_AUDIO_BYTES:
+                        await websocket.send_json({"type": "error", "error": "Audio payload too large."})
+                        continue
+                    if not _looks_like_wav(audio_bytes):
+                        await websocket.send_json({"type": "error", "error": "Audio must be WAV-framed (16-bit PCM)."})
+                        continue
+                    try:
+                        prompt_text, result = voice_interface.process_voice_input(
+                            audio_bytes,
+                            mime_type="audio/wav",
+                            speak_response=False,
+                            on_progress=on_progress_sync,
+                        )
+                    except VoiceError as exc:
+                        await websocket.send_json({"type": "error", "error": f"Voice processing failed: {exc}"})
+                        continue
+                    if not prompt_text:
+                        await websocket.send_json({"type": "error", "error": "No speech detected."})
+                        continue
+
+                if not prompt_text:
+                    continue
+
+                # Send user transcription to UI
+                await websocket.send_json({
+                    "type": "transcription",
+                    "role": "user",
+                    "text": prompt_text,
+                })
+                await websocket.send_json({"type": "status", "status": "thinking"})
+
+                if result is None:
+                    # Text path: execute here. (Voice path already executed
+                    # inside process_voice_input, tagged input_modality="voice".)
+                    result = runtime.run(prompt_text, on_progress=on_progress_sync)
                 formatted = _format_execution_response(result)
+
+                # Voice turns: speak the outcome back over the socket as a
+                # complete audio blob (the TTS provider returns whole audio,
+                # not a stream — no fake streaming). None-safe: falls back
+                # to text-only when TTS is degraded or unconfigured.
+                voice_audio_msg: dict[str, Any] | None = None
+                if input_modality == "voice" and voice_interface is not None:
+                    speak_text = (
+                        "I need your confirmation on screen to proceed."
+                        if formatted.awaiting_approval
+                        else (formatted.output or formatted.error or "Done.")
+                    )
+                    tts_out = voice_interface.synthesize_speech_text(speak_text)
+                    if tts_out is not None:
+                        tts_format, tts_bytes = tts_out
+                        voice_audio_msg = {
+                            "type": "audio",
+                            "format": tts_format,
+                            "audio": base64.b64encode(tts_bytes).decode("ascii"),
+                        }
 
                 if formatted.awaiting_approval:
                     await websocket.send_json({"type": "status", "status": "permission"})
@@ -190,6 +245,11 @@ def create_app(
                         "command": formatted.reason or prompt_text,
                         "reason": formatted.reason or "Command requires user confirmation",
                     })
+                    if voice_audio_msg is not None:
+                        await websocket.send_json(voice_audio_msg)
+                    # Voice turn ends here: HIGH-risk actions require visual
+                    # confirmation (SudoPopup click / typed approval).
+                    await websocket.send_json({"type": "turnComplete"})
                 else:
                     response_text = formatted.output or formatted.error or "Done."
                     await websocket.send_json({
@@ -197,6 +257,8 @@ def create_app(
                         "role": "model",
                         "text": response_text,
                     })
+                    if voice_audio_msg is not None:
+                        await websocket.send_json(voice_audio_msg)
                     await websocket.send_json({"type": "turnComplete"})
                     await websocket.send_json({"type": "status", "status": "listening"})
 

@@ -1,6 +1,6 @@
 import React from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Power } from "lucide-react";
+import { X, Power, Mic } from "lucide-react";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -9,6 +9,10 @@ interface SettingsPanelProps {
   onAutoStartChange: (enabled: boolean) => void;
   /** True when running inside the Electron desktop shell. */
   isDesktop: boolean;
+  /** Wake-word listening (orb renderer hosts the listener). */
+  wakeWordEnabled: boolean;
+  wakePhrase: string;
+  onWakeWordChange: (enabled: boolean) => void;
 }
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
@@ -17,6 +21,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   autoStart,
   onAutoStartChange,
   isDesktop,
+  wakeWordEnabled,
+  wakePhrase,
+  onWakeWordChange,
 }) => {
   return (
     <AnimatePresence>
@@ -71,6 +78,41 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               <span
                 className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
                   autoStart ? "left-[22px]" : "left-0.5"
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Wake-word toggle (desktop shell only: the orb renderer hosts it) */}
+          <div className="mt-5 flex items-start justify-between gap-4 border-t border-white/10 pt-5">
+            <div>
+              <div className="flex items-center gap-2 text-sm text-slate-200">
+                <Mic className="w-4 h-4 text-emerald-400" />
+                Wake word
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Listen for &ldquo;{wakePhrase}&rdquo; while dormant. Detection
+                runs locally in the Orb; nothing is recorded or sent until
+                the phrase is heard.
+              </p>
+              {!isDesktop && (
+                <p className="mt-1 text-xs text-amber-400/80">
+                  Applies to the Electron desktop app.
+                </p>
+              )}
+            </div>
+            <button
+              role="switch"
+              aria-checked={wakeWordEnabled}
+              aria-label="Wake word listening"
+              onClick={() => onWakeWordChange(!wakeWordEnabled)}
+              className={`relative mt-1 h-6 w-11 shrink-0 rounded-full transition ${
+                wakeWordEnabled ? "bg-emerald-500" : "bg-white/10"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                  wakeWordEnabled ? "left-[22px]" : "left-0.5"
                 }`}
               />
             </button>

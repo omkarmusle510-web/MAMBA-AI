@@ -14,7 +14,7 @@
  * Mamba Core remains the sole source of truth.
  */
 
-const { app, BrowserWindow, shell, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, screen, session } = require("electron");
 const path = require("path");
 const { BackendManager } = require("./backendManager.cjs");
 const { FrontendManager } = require("./frontendManager.cjs");
@@ -41,6 +41,9 @@ let isQuitting = false;
 let isCleanedUp = false;
 let currentOrbState = "idle";
 let resolvedFrontendUrl = null;
+// Set when a wake-word trigger requests a voice turn but the main-window
+// renderer may not be listening yet; consumed once via IPC.
+let pendingVoiceTurn = false;
 
 const isDev = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 const isSmokeTest = process.argv.includes("--smoke-test");
@@ -159,6 +162,32 @@ function getErrorHtml(errorMessage) {
   <button class="btn" onclick="location.reload()">Retry Launch</button>
 </body>
 </html>`;
+}
+
+// ---- Microphone permission ----
+// The desktop shell hosts voice capture in its own renderers. Grant the
+// "media" permission only to Mamba's own app origins (loopback static
+// server / Vite dev server). Everything else keeps the default deny.
+function setupMediaPermissions() {
+  const allowedPrefixes = ["http://127.0.0.1:", "http://localhost:"];
+  try {
+    session.defaultSession.setPermissionRequestHandler(
+      (webContents, permission, callback) => {
+        try {
+          const url = webContents.getURL() || "";
+          const isAppOrigin = allowedPrefixes.some((p) => url.startsWith(p));
+          if (permission === "media" && isAppOrigin) {
+            callback(true);
+            return;
+          }
+        } catch {}
+        callback(false);
+      }
+    );
+    console.log("[Mamba Shell] Media permission handler installed (app origins only).");
+  } catch (err) {
+    console.warn("[Mamba Shell] Could not install media permission handler:", err.message);
+  }
 }
 
 function showWindow() {
@@ -413,11 +442,48 @@ function setupIpc() {
   ipcMain.on("mamba:set-autostart", (event, enabled) => {
     event.returnValue = setAutoStartEnabled(enabled === true);
   });
+
+  // Desktop voice activation: the wake listener (orb renderer) detected the
+  // wake phrase. This is one more activation source alongside hotkey/tray —
+  // the lifecycle machine itself is unchanged.
+  ipcMain.on("mamba:wake-detected", async () => {
+    if (!lifecycleManager) return;
+    try {
+      await lifecycleManager.requestActivation("wake-word");
+      // Remember the voice-turn request in case the renderer is not
+      // listening yet (first activation still loading the page).
+      pendingVoiceTurn = true;
+      const win = mainWindow;
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("mamba:start-voice-turn");
+      }
+    } catch (err) {
+      console.error("[Mamba Shell] Wake-word activation failed:", err.message);
+      pendingVoiceTurn = false;
+      if (orbWindow && !orbWindow.isDestroyed()) {
+        orbWindow.webContents.send("mamba:state", "error");
+      }
+    }
+  });
+
+  ipcMain.on("mamba:consume-pending-voice-turn", (event) => {
+    event.returnValue = pendingVoiceTurn;
+    pendingVoiceTurn = false;
+  });
+
+  // Wake-word setting changed in the main-window Settings panel: forward to
+  // the orb renderer, which hosts the wake listener.
+  ipcMain.on("mamba:wake-setting-changed", (event, enabled) => {
+    if (orbWindow && !orbWindow.isDestroyed()) {
+      orbWindow.webContents.send("mamba:wake-setting", enabled === true);
+    }
+  });
 }
 
 async function bootApp() {
   createMainWindow();
   setupIpc();
+  setupMediaPermissions();
 
   // 1. Initialize System Tray (always available across all states)
   trayManager = new TrayManager({

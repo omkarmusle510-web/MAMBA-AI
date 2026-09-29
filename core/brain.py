@@ -336,6 +336,32 @@ class Brain:
                 res = context.record.to_result(output=msg)
                 self._record_turn_context(user_request, res)
                 return res
+            elif user_request.metadata.get("input_modality") == "voice":
+                # SAFETY (voice approval policy): a pending approval is always a
+                # HIGH-risk action (LOW/MEDIUM never ASK). Voice-originated
+                # approvals are never honored — the user must confirm visually
+                # (SudoPopup click) or by typed approval. The pending approval
+                # is deliberately left intact so it can still be resolved.
+                context = ExecutionContext.from_request(user_request)
+                context.transition_to(ExecutionState.PLANNING)
+                msg = (
+                    f"Voice approval is not permitted for "
+                    f"'{self._pending_approval.step.description}'. "
+                    "Please confirm on screen to proceed."
+                )
+                plan = ExecutionPlan(steps=(PlanStep(description="Respond to user", intent="respond"),))
+                context.attach_plan(plan)
+                context.transition_to(ExecutionState.EXECUTING)
+                obs = Observation(
+                    step_id=plan.steps[0].id,
+                    content=msg,
+                    success=True,
+                )
+                context.add_observation(obs)
+                context.transition_to(ExecutionState.COMPLETED)
+                res = context.record.to_result(output=msg)
+                self._record_turn_context(user_request, res)
+                return res
             else:
                 pending = self._pending_approval
                 self._pending_approval = None

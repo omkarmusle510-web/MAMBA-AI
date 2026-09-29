@@ -125,13 +125,16 @@ class TestVoiceInterface:
             stt=mock_stt,
             tts=mock_tts,
             player=mock_player,
+            capture=MagicMock(),
         )
 
         dummy_audio = _make_dummy_wav()
         prompt, result = voice.process_voice_input(dummy_audio)
 
         assert prompt == "Show system info"
-        assert mock_brain.last_request == "Show system info"
+        # Voice requests are tagged so safety policy can tell spoken from typed input.
+        assert mock_brain.last_request.goal == "Show system info"
+        assert mock_brain.last_request.metadata["input_modality"] == "voice"
         assert result.status == ResultStatus.COMPLETED
         mock_stt.transcribe.assert_called_once_with(dummy_audio, mime_type="audio/wav")
         mock_tts.synthesize.assert_called_once_with("I can do that for you.")
@@ -153,6 +156,7 @@ class TestVoiceInterface:
             stt=mock_stt,
             tts=mock_tts,
             player=mock_player,
+            capture=MagicMock(),
         )
 
         assert voice.runtime is runtime
@@ -162,7 +166,8 @@ class TestVoiceInterface:
         prompt, result = voice.process_voice_input(dummy_audio)
 
         assert prompt == "What is the date?"
-        assert mock_brain.last_request == "What is the date?"
+        assert mock_brain.last_request.goal == "What is the date?"
+        assert mock_brain.last_request.metadata["input_modality"] == "voice"
         assert result.status == ResultStatus.COMPLETED
 
     def test_empty_speech_handled_cleanly(self) -> None:
@@ -171,7 +176,7 @@ class TestVoiceInterface:
         mock_stt.transcribe.return_value = "   "
         mock_tts = MagicMock()
 
-        voice = VoiceInterface(brain=mock_brain, stt=mock_stt, tts=mock_tts)  # type: ignore
+        voice = VoiceInterface(brain=mock_brain, stt=mock_stt, tts=mock_tts, capture=MagicMock())  # type: ignore
         prompt, result = voice.process_voice_input(_make_dummy_wav())
 
         assert prompt == ""
@@ -192,6 +197,7 @@ class TestVoiceInterface:
             stt=mock_stt,
             tts=mock_tts,
             player=mock_player,
+            capture=MagicMock(),
         )
 
         # Must NOT raise exception despite TTS failure
@@ -201,3 +207,60 @@ class TestVoiceInterface:
         assert result.output == "Output text"
         mock_player.play.assert_not_called()
 
+
+
+class TestSynthesizeSpeechText:
+    """Transport-facing TTS helper: (format, bytes) or None, never raises."""
+
+    def _voice(self, tts: MagicMock) -> VoiceInterface:
+        return VoiceInterface(
+            brain=MockBrain(),  # type: ignore
+            stt=MagicMock(),
+            tts=tts,
+            player=MagicMock(),
+            capture=MagicMock(),
+        )
+
+    def test_returns_format_and_bytes(self) -> None:
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = b"ID3" + b"\x00" * 100  # MP3 magic
+        voice = self._voice(mock_tts)
+
+        out = voice.synthesize_speech_text("Hello there")
+        assert out is not None
+        fmt, audio = out
+        assert fmt == "mp3"
+        assert audio == b"ID3" + b"\x00" * 100
+
+    def test_detects_wav_format(self) -> None:
+        mock_tts = MagicMock()
+        mock_tts.synthesize.return_value = _make_dummy_wav()
+        voice = self._voice(mock_tts)
+
+        out = voice.synthesize_speech_text("Hello")
+        assert out is not None
+        assert out[0] == "wav"
+
+    def test_returns_none_on_tts_failure(self) -> None:
+        mock_tts = MagicMock()
+        mock_tts.synthesize.side_effect = TTSError("boom")
+        voice = self._voice(mock_tts)
+
+        assert voice.synthesize_speech_text("Hello") is None
+
+    def test_returns_none_for_empty_text(self) -> None:
+        mock_tts = MagicMock()
+        voice = self._voice(mock_tts)
+
+        assert voice.synthesize_speech_text("   ") is None
+        mock_tts.synthesize.assert_not_called()
+
+    def test_quota_failure_degrades_future_calls(self) -> None:
+        mock_tts = MagicMock()
+        mock_tts.synthesize.side_effect = TTSError("HTTP 429 Quota Exceeded")
+        voice = self._voice(mock_tts)
+
+        assert voice.synthesize_speech_text("Hello") is None
+        # Degraded: provider is not called again.
+        assert voice.synthesize_speech_text("Hello") is None
+        mock_tts.synthesize.assert_called_once()

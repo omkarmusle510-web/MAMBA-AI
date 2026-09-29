@@ -1,13 +1,28 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { MambaPresence, MambaPresenceState } from "./MambaPresence";
+import { WakeController } from "./wake/controller";
+import { loadSettings } from "./settingsStore";
 
+/**
+ * Floating Orb — presentation only.
+ *
+ * The Orb visualizes shell/app state. It TEMPORARILY hosts the desktop wake
+ * listener (the only renderer alive while DORMANT), but the listener itself
+ * is a separate desktop interaction service (src/wake/) — not Orb logic.
+ */
 export const FloatingOrb: React.FC = () => {
   const [presenceState, setPresenceState] = useState<MambaPresenceState>("idle");
+  // Mic-armed indicator: true while the wake listener holds no mic but is
+  // actively listening for the wake phrase.
+  const [wakeArmed, setWakeArmed] = useState(false);
+  const wakeRef = useRef<WakeController | null>(null);
+  const wakeEnabledRef = useRef<boolean>(false);
 
   useEffect(() => {
     // Listen for state changes from Electron shell
+    let cleanupState: (() => void) | undefined;
     if (window.mambaDesktop?.onState) {
-      const cleanup = window.mambaDesktop.onState((state: string) => {
+      cleanupState = window.mambaDesktop.onState((state: string) => {
         const validStates: MambaPresenceState[] = [
           "idle",
           "listening",
@@ -23,9 +38,65 @@ export const FloatingOrb: React.FC = () => {
         } else if (state === "STARTING") {
           setPresenceState("thinking");
         }
+        // Re-arm the wake listener when the session goes quiet. Re-arm is
+        // idempotent; the controller ignores it while already running.
+        if (state === "idle" || state === "DORMANT") {
+          const ctl = wakeRef.current;
+          if (ctl && wakeEnabledRef.current && !ctl.isRunning) {
+            ctl.rearm();
+          }
+        }
       });
-      return cleanup;
     }
+
+    // Host the wake listener (desktop shell only). Structured as a service;
+    // the Orb only displays its state via the mic indicator.
+    const canHostWake = Boolean(window.mambaDesktop?.notifyWakeDetected);
+    if (canHostWake) {
+      const settings = loadSettings();
+      wakeEnabledRef.current = settings.wakeWordEnabled !== false;
+      const controller = new WakeController({
+        phrase: settings.wakePhrase || "hey mamba",
+        sensitivity: settings.sensitivity ?? 60,
+        onWake: () => {
+          setWakeArmed(false);
+          try {
+            window.mambaDesktop?.notifyWakeDetected?.();
+          } catch {
+            /* shell unreachable — stay dormant */
+          }
+        },
+        onState: (s) => {
+          setWakeArmed(s === "listening");
+        },
+      });
+      wakeRef.current = controller;
+      if (wakeEnabledRef.current) {
+        controller.start();
+      }
+
+      // Runtime toggle from the main-window Settings panel.
+      const cleanupWakeSetting = window.mambaDesktop?.onWakeSetting?.((enabled) => {
+        wakeEnabledRef.current = enabled;
+        if (enabled) {
+          controller.rearm();
+        } else {
+          controller.stop();
+          setWakeArmed(false);
+        }
+      });
+
+      return () => {
+        cleanupState?.();
+        cleanupWakeSetting?.();
+        controller.stop();
+        wakeRef.current = null;
+      };
+    }
+
+    return () => {
+      cleanupState?.();
+    };
   }, []);
 
   const handleClick = () => {
@@ -58,6 +129,20 @@ export const FloatingOrb: React.FC = () => {
           showLabel={false}
         />
       </div>
+
+      {/* Mic-armed indicator: visible while the wake listener is armed. */}
+      {wakeArmed && (
+        <div
+          className="absolute pointer-events-none"
+          style={{ bottom: 18, right: 18 }}
+          title="Wake-word listening is on"
+        >
+          <div
+            className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"
+            style={{ boxShadow: "0 0 8px #34d399" }}
+          />
+        </div>
+      )}
 
       {/* Central interactive click target right over the core and inner particle area */}
       <div

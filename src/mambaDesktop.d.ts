@@ -5,6 +5,11 @@ export interface MambaDesktopAPI {
   getLifecycleState?: () => string;
   getAutoStart?: () => boolean;
   setAutoStart?: (enabled: boolean) => boolean;
+  notifyWakeDetected?: () => void;
+  onVoiceTurnRequest?: (callback: () => void) => () => void;
+  consumePendingVoiceTurn?: () => boolean;
+  notifyWakeSettingChanged?: (enabled: boolean) => void;
+  onWakeSetting?: (callback: (enabled: boolean) => void) => () => void;
   onLifecycleState?: (callback: (state: string) => void) => () => void;
   reportActivity?: (type: string) => void;
   reportTaskState?: (active: boolean) => void;

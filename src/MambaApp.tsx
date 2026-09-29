@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from "react";
 import { MessageSquare, Globe, Mic, MicOff, Settings, Volume2 } from "lucide-react";
 
 import { MambaAudioSession, LiveState } from "./audio";
-import { MambaWakeWordDetector } from "./wakeWord";
 import { MambaPresence, MambaPresenceState } from "./MambaPresence";
 import { SudoPopup } from "./SudoPopup";
 import { SettingsPanel } from "./SettingsPanel";
@@ -50,9 +49,10 @@ export const MambaApp: React.FC = () => {
   // Toast notifications hook
   const { toasts, addToast, dismiss } = useToast(6000);
 
-  // Audio session & wake word refs
+  // Audio session ref (wake detection lives in the orb renderer — see src/wake/)
   const audioSessionRef = useRef<MambaAudioSession | null>(null);
-  const wakeWordRef = useRef<MambaWakeWordDetector | null>(null);
+  // Set when the shell requested a voice turn before the transport connected.
+  const pendingTurnRef = useRef<boolean>(false);
 
   // Sync liveState to desktop shell (for Floating Orb synchronization)
   useEffect(() => {
@@ -77,11 +77,45 @@ export const MambaApp: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Initialize session and wake word detector
+  const runVoiceTurn = () => {
+    const session = audioSessionRef.current;
+    if (!session || session.isVoiceTurnActive()) return;
+    // Only start from a quiet state — never interrupt an in-flight turn.
+    const s = session.getState();
+    if (s !== "idle" && s !== "listening" && s !== "error") return;
+    try {
+      window.mambaDesktop?.reportVoiceState?.(true);
+    } catch {
+      /* non-desktop context */
+    }
+    addToast("Listening… speak your command.", "info");
+    session.startVoiceTurn().catch((err) => {
+      addToast(err?.message || "Voice turn failed.", "error");
+      try {
+        window.mambaDesktop?.reportVoiceState?.(false);
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+  // Keep a stable reference for the mount-once effect below.
+  const runVoiceTurnRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    runVoiceTurnRef.current = runVoiceTurn;
+  });
+
+  // Initialize session and voice-turn wiring.
+  // Wake-word DETECTION lives in the orb renderer (src/wake/); this window
+  // only runs the resulting one-turn voice session.
   useEffect(() => {
     const session = new MambaAudioSession({
       onStateChange: (state) => {
         setLiveState(state);
+        // A voice turn requested before the transport connected starts now.
+        if (state === "idle" && pendingTurnRef.current) {
+          pendingTurnRef.current = false;
+          runVoiceTurnRef.current();
+        }
       },
       onTranscription: (role, text) => {
         const newEntry: TranscriptEntry = {
@@ -111,29 +145,37 @@ export const MambaApp: React.FC = () => {
         addToast(err, "error");
         setLiveState("error");
       },
+      onVoiceTurnComplete: () => {
+        // The voice turn released the mic; tell the shell so the lifecycle
+        // timers and the orb wake listener can resume their quiet state.
+        try {
+          window.mambaDesktop?.reportVoiceState?.(false);
+        } catch {
+          /* non-desktop context */
+        }
+      },
     });
 
     audioSessionRef.current = session;
     session.connect();
 
-    // Wake word detector
-    const wakeDetector = new MambaWakeWordDetector();
-    wakeWordRef.current = wakeDetector;
-
-    if (settings.wakeWordEnabled) {
-      wakeDetector.start({
-        phrase: settings.wakePhrase || "hey mamba",
-        sensitivity: settings.sensitivity,
-        onTriggered: () => {
-          addToast("Wake word detected: Listening...", "info");
-          setLiveState("listening");
-        },
-      });
+    // Voice-turn requests from the shell (wake-word trigger in the orb
+    // renderer). The shell also stashes a pending flag in case this
+    // renderer was still loading when the trigger fired.
+    const cleanupVoiceTurn = window.mambaDesktop?.onVoiceTurnRequest?.(() => {
+      runVoiceTurnRef.current();
+    });
+    try {
+      if (window.mambaDesktop?.consumePendingVoiceTurn?.() === true) {
+        pendingTurnRef.current = true;
+      }
+    } catch {
+      /* bridge unavailable */
     }
 
     return () => {
+      cleanupVoiceTurn?.();
       session.disconnect();
-      wakeDetector.stop();
     };
   }, []);
 
@@ -167,6 +209,23 @@ export const MambaApp: React.FC = () => {
       applied
         ? "Mamba will start with Windows (dormant at login)."
         : "Mamba will no longer start with Windows.",
+      "info"
+    );
+  };
+
+  // Handle the wake-word toggle. The orb renderer hosts the wake listener;
+  // notify the shell so it can arm/disarm it without a restart.
+  const handleWakeWordChange = (enabled: boolean) => {
+    setSettings(saveSettings({ wakeWordEnabled: enabled }));
+    try {
+      window.mambaDesktop?.notifyWakeSettingChanged?.(enabled);
+    } catch {
+      /* non-desktop context */
+    }
+    addToast(
+      enabled
+        ? `Wake word enabled — say "${settings.wakePhrase || "hey mamba"}" while dormant.`
+        : "Wake word disabled.",
       "info"
     );
   };
@@ -222,6 +281,9 @@ export const MambaApp: React.FC = () => {
         autoStart={autoStart}
         onAutoStartChange={handleAutoStartChange}
         isDesktop={Boolean(window.mambaDesktop?.isDesktop)}
+        wakeWordEnabled={settings.wakeWordEnabled !== false}
+        wakePhrase={settings.wakePhrase || "hey mamba"}
+        onWakeWordChange={handleWakeWordChange}
       />
 
       {/* Header Bar */}
@@ -293,11 +355,8 @@ export const MambaApp: React.FC = () => {
           inputNode={audioSessionRef.current?.inputAnalyser}
           outputNode={audioSessionRef.current?.outputAnalyser}
           onClick={() => {
-            if (liveState === "listening") {
-              setLiveState("idle");
-            } else {
-              setLiveState("listening");
-            }
+            // Push-to-talk parity with the wake word: one voice turn.
+            runVoiceTurnRef.current();
           }}
         />
       </div>

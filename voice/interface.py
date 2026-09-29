@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from core.brain import Brain
@@ -14,6 +15,20 @@ from .normalization import normalize_speech_text
 from .protocols import AudioCapture, AudioPlayer, STTProvider, TTSProvider
 from .stt import GroqSTTProvider
 from .tts import CloudflareTTSProvider
+
+
+def _detect_audio_format(data: bytes) -> str:
+    """Sniff a container format from magic bytes (informational for clients)."""
+    if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "wav"
+    if len(data) >= 4 and data[0:4] == b"OggS":
+        return "ogg"
+    if len(data) >= 3 and (
+        data[0:3] == b"ID3" or (data[0] == 0xFF and (data[1] & 0xE0) == 0xE0)
+    ):
+        return "mp3"
+    # Cloudflare Workers AI Aura voices return MP3.
+    return "mp3"
 
 
 class VoiceInterface:
@@ -76,8 +91,16 @@ class VoiceInterface:
         *,
         mime_type: str = "audio/wav",
         speak_response: bool = True,
+        input_modality: str = "voice",
+        on_progress: Callable[[str], None] | None = None,
     ) -> tuple[str, ExecutionResult]:
-        """Process pre-recorded or captured audio through Mamba Core."""
+        """Process pre-recorded or captured audio through Mamba Core.
+
+        The request is tagged with ``input_modality`` metadata (default
+        ``"voice"``) so downstream safety policy can distinguish spoken
+        input from typed input. In particular, voice-originated approvals
+        never auto-resume a pending HIGH-risk action.
+        """
         if not audio_bytes:
             raise AudioCaptureError("no audio captured from microphone")
 
@@ -100,10 +123,21 @@ class VoiceInterface:
         print(f"\nmamba (voice)> {clean_transcript}")
 
         # 2. Execute through canonical Mamba Runtime / Brain
+        user_request = UserRequest(
+            goal=clean_transcript, metadata={"input_modality": input_modality}
+        )
         if self._runtime is not None:
-            result = self._runtime.run(clean_transcript)
+            result = (
+                self._runtime.run(user_request, on_progress=on_progress)
+                if on_progress is not None
+                else self._runtime.run(user_request)
+            )
         else:
-            result = self._brain.run(clean_transcript)
+            result = (
+                self._brain.run(user_request, on_progress=on_progress)
+                if on_progress is not None
+                else self._brain.run(user_request)
+            )
 
         # 3. Format response for user
         text_to_speak = self._extract_speech_text(result)
@@ -199,6 +233,38 @@ class VoiceInterface:
                 )
             else:
                 print(f"[Speech Synthesis / Playback Warning: {exc}]", file=sys.stderr)
+
+    def synthesize_speech_text(self, text: str) -> tuple[str, bytes] | None:
+        """Synthesize text to ``(format, audio_bytes)`` for transport delivery.
+
+        Used by the WebSocket transport to speak a response back to a remote
+        client. Never raises: returns ``None`` when TTS is degraded,
+        unconfigured, or fails, so callers can fall back to text.
+        """
+        if self._tts_degraded:
+            return None
+        try:
+            spoken_text = normalize_speech_text(text or "")
+            if not spoken_text:
+                return None
+            if len(spoken_text) > 800:
+                # Truncate overly long outputs to bound audio duration/size.
+                spoken_text = spoken_text[:800] + "... and more."
+            audio = self._tts.synthesize(spoken_text)
+            if not audio:
+                return None
+            return _detect_audio_format(audio), audio
+        except Exception as exc:
+            err_msg = str(exc)
+            if "429" in err_msg or "quota" in err_msg.lower() or "neurons" in err_msg.lower():
+                self._tts_degraded = True
+                print(
+                    "\n[Voice TTS Notice: Cloudflare TTS quota reached (HTTP 429). Continuing in text-only mode.]",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[Speech Synthesis Warning: {exc}]", file=sys.stderr)
+            return None
 
     def _extract_speech_text(self, result: ExecutionResult) -> str:
         """Extract user-facing text from execution result for speech synthesis."""

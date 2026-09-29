@@ -1,0 +1,105 @@
+/**
+ * Desktop Voice Activation — wake listener controller.
+ *
+ * This is a desktop interaction service, NOT Orb visual logic. It is hosted
+ * by the orb renderer only because that renderer is alive while DORMANT;
+ * the Orb component itself merely displays state.
+ *
+ * Phase A (one-turn): on wake, the controller stops the engine (releasing
+ * any capture it holds), plays the engine's activation cue, and notifies
+ * the shell via window.mambaDesktop.notifyWakeDetected(). The shell
+ * activates the session; the main-window voice turn then owns the
+ * microphone for command capture. Re-arm via rearm().
+ */
+import type { WakeEngine, WakeEngineState } from "./types";
+import { WebSpeechWakeEngine } from "./webSpeechEngine";
+
+export interface WakeControllerOptions {
+  phrase?: string;
+  sensitivity?: number;
+  /** Called when the wake phrase is detected (after the engine stops). */
+  onWake?: () => void;
+  /** State updates for the hosting UI (mic indicator). */
+  onState?: (state: WakeEngineState) => void;
+}
+
+export class WakeController {
+  private engine: WakeEngine;
+  private opts: WakeControllerOptions;
+  private running = false;
+
+  constructor(opts: WakeControllerOptions = {}, engine?: WakeEngine) {
+    this.opts = opts;
+    // Engine backend is swappable; the interim Web Speech backend lets the
+    // one-turn pipeline be proven before a local engine is evaluated.
+    this.engine = engine ?? new WebSpeechWakeEngine();
+  }
+
+  /** Whether a wake engine can run in this environment at all. */
+  isSupported(): boolean {
+    return this.engine.isSupported();
+  }
+
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  /** Start listening for the wake phrase. Safe to call repeatedly. */
+  start(): boolean {
+    if (this.running) return true;
+    const ok = this.engine.start({
+      phrase: this.opts.phrase || "hey mamba",
+      sensitivity: this.opts.sensitivity ?? 60,
+      onTriggered: () => this.handleTrigger(),
+      onState: (s) => {
+        try {
+          this.opts.onState?.(s);
+        } catch {
+          /* ignore */
+        }
+      },
+    });
+    // start() may return a promise in future engines; treat truthy as ok.
+    if (ok === false) {
+      this.running = false;
+      return false;
+    }
+    this.running = true;
+    return true;
+  }
+
+  /** Stop listening and release all capture resources. */
+  stop(): void {
+    this.running = false;
+    try {
+      this.engine.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Re-arm after a voice turn completes. */
+  rearm(): void {
+    this.stop();
+    this.start();
+  }
+
+  setPhrase(phrase: string): void {
+    try {
+      this.engine.setPhrase(phrase);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private handleTrigger(): void {
+    // Release the detector's capture immediately so the main-window voice
+    // turn can acquire the microphone without contention.
+    this.stop();
+    try {
+      this.opts.onWake?.();
+    } catch {
+      /* never let a handler error break re-arming */
+    }
+  }
+}

@@ -593,6 +593,7 @@ def test_voice_tts_429_quota_degrades_gracefully():
         stt=mock_stt,
         tts=mock_tts,
         player=mock_player,
+        capture=MagicMock(),
     )
 
     assert voice.tts_degraded is False

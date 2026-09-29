@@ -14,6 +14,24 @@ contextBridge.exposeInMainWorld("mambaDesktop", {
   getLifecycleState: () => ipcRenderer.sendSync("mamba:get-lifecycle-state"),
   getAutoStart: () => ipcRenderer.sendSync("mamba:get-autostart") === true,
   setAutoStart: (enabled) => ipcRenderer.sendSync("mamba:set-autostart", enabled === true) === true,
+  // Desktop voice activation (Phase A: one-turn). The wake listener lives in
+  // the orb renderer; it notifies the shell, which activates the session and
+  // asks the main-window renderer to run a single voice turn.
+  notifyWakeDetected: () => ipcRenderer.send("mamba:wake-detected"),
+  onVoiceTurnRequest: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const handler = () => callback();
+    ipcRenderer.on("mamba:start-voice-turn", handler);
+    return () => ipcRenderer.removeListener("mamba:start-voice-turn", handler);
+  },
+  consumePendingVoiceTurn: () => ipcRenderer.sendSync("mamba:consume-pending-voice-turn") === true,
+  notifyWakeSettingChanged: (enabled) => ipcRenderer.send("mamba:wake-setting-changed", enabled === true),
+  onWakeSetting: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const handler = (_event, enabled) => callback(enabled === true);
+    ipcRenderer.on("mamba:wake-setting", handler);
+    return () => ipcRenderer.removeListener("mamba:wake-setting", handler);
+  },
   onLifecycleState: (callback) => {
     if (typeof callback !== "function") return () => {};
     const handler = (_event, state) => callback(state);

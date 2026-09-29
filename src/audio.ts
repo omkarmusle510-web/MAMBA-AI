@@ -1,13 +1,22 @@
 /**
- * Audio handling utility for Elysia Live API Voice stream.
- * Handles:
- * - 16kHz layout sampling for microphone stream.
- * - Raw Little Endian Int16 PCM translation.
- * - 24kHz layout output sampling for model voice playback.
- * - Gapless double-buffer queue scheduler.
- * - Interrupt signal immediate stop.
- * - Input & Output AnalyserNodes for real-time waveform visuals.
+ * Audio session for the Mamba desktop voice transport (/live WebSocket).
+ *
+ * Phase A (one-turn voice):
+ * - connect(): WebSocket + TTS playback output only. The microphone is NOT
+ *   held open; it is acquired per voice turn and released afterwards.
+ * - startVoiceTurn(): acquire mic -> listening cue -> VAD-segmented capture
+ *   -> ONE WAV-framed utterance sent as {type:"audio", format:"wav"}.
+ * - The server transcribes (Groq STT) -> MambaRuntime -> speaks the reply
+ *   back as a complete audio blob (no fake streaming).
+ * - Playback end + turnComplete -> onVoiceTurnComplete -> the turn ends and
+ *   the mic is released. No continuous conversation (Phase B), no barge-in
+ *   (Phase C).
+ *
+ * Text turns (typed chat) use the same socket via sendText() and are
+ * unaffected by voice-turn state.
  */
+
+import { wavToBase64 } from "./audio/wav";
 
 export type LiveState =
   | "disconnected"
@@ -19,42 +28,15 @@ export type LiveState =
   | "permission"
   | "error";
 
-// PCM Conversion Helper: converts Float32Array [-1.0, 1.0] to signed Int16 Raw PCM Little Endian
-function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(input.length * 2);
-  const view = new DataView(buffer);
-  let offset = 0;
-  for (let i = 0; i < input.length; i++, offset += 2) {
-    let s = Math.max(-1, Math.min(1, input[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-  return buffer;
-}
-
-// Float conversion helper: converts signed Int16 array buffer to Float32Array [-1.0, 1.0]
-function pcm16ToFloats(uint8Array: Uint8Array): Float32Array {
-  const int16 = new Int16Array(
-    uint8Array.buffer,
-    uint8Array.byteOffset,
-    uint8Array.byteLength / 2
-  );
-  const floats = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) {
-    floats[i] = int16[i] / 32768.0;
-  }
-  return floats;
-}
-
-// Convert ArrayBuffer to Base64 String
-function base64ArrayBuffer(arrayBuffer: ArrayBuffer): string {
-  let binary = '';
-  const bytes = new Uint8Array(arrayBuffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return window.btoa(binary);
-}
+// --- One-turn capture tuning (VAD-lite, energy based) ---
+// RMS is computed on float32 mic samples: silence ~= 0.001-0.005,
+// conversational speech ~= 0.02-0.2. These constants are conservative
+// (prefer capturing a little extra over clipping the start).
+const VAD_START_THRESHOLD = 0.02;
+const VAD_END_THRESHOLD = 0.012;
+const VAD_SILENCE_END_MS = 1200;
+const VAD_MAX_TURN_MS = 20000;
+const VAD_MIN_AUDIO_MS = 400;
 
 // Convert Base64 string to Uint8Array
 function base64ToUint8Array(base64: string): Uint8Array {
@@ -69,25 +51,28 @@ function base64ToUint8Array(base64: string): Uint8Array {
 
 export class MambaAudioSession {
   private ws: WebSocket | null = null;
-  
-  // Audios contexts (separate to match exact required sample rates)
-  private inputAudioCtx: AudioContext | null = null;
+
+  // Output context for TTS playback (kept for the session lifetime).
   private outputAudioCtx: AudioContext | null = null;
-  
-  // Audio sources & processors
+
+  // Per-turn capture resources (acquired in startVoiceTurn, released in endVoiceTurn).
+  private inputAudioCtx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
   private micSourceNode: MediaStreamAudioSourceNode | null = null;
   private micProcessorNode: ScriptProcessorNode | null = null;
-  
+
   // Visualisers
   public inputAnalyser: AnalyserNode | null = null;
   public outputAnalyser: AnalyserNode | null = null;
   private outputGainNode: GainNode | null = null;
-  
-  // Buffering / Playback details
-  private nextStartTime = 0;
+
+  // Playback
   private activeSources: AudioBufferSourceNode[] = [];
-  
+
+  // Voice-turn lifecycle
+  private voiceTurnActive = false;
+  private turnCompleteReceived = false;
+
   // State Callbacks
   private onStateChange: (state: LiveState) => void;
   private onTranscription: (role: "user" | "model", text: string) => void;
@@ -98,30 +83,10 @@ export class MambaAudioSession {
   private onMemorySync?: (memories: any[]) => void;
   private onReminder?: (text: string, id: string) => void;
   private onTerminalOutput?: (tool: string, args: any, output: string) => void;
-  
+  private onVoiceTurnComplete?: () => void;
+
   private currentState: LiveState = "disconnected";
   private isActivated = false;
-  private isPttActive = false;
-
-  private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.code === "Space" && !e.repeat) {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
-      this.isPttActive = true;
-      if (this.micStream && this.micStream.getAudioTracks().length > 0) {
-        this.micStream.getAudioTracks()[0].enabled = true;
-      }
-    }
-  };
-
-  private handleKeyUp = (e: KeyboardEvent) => {
-    if (e.code === "Space") {
-      this.isPttActive = false;
-      if (this.micStream && this.micStream.getAudioTracks().length > 0) {
-        this.micStream.getAudioTracks()[0].enabled = false;
-      }
-    }
-  };
 
   constructor(handlers: {
     onStateChange: (state: LiveState) => void;
@@ -133,6 +98,7 @@ export class MambaAudioSession {
     onMemorySync?: (memories: any[]) => void;
     onReminder?: (text: string, id: string) => void;
     onTerminalOutput?: (tool: string, args: any, output: string) => void;
+    onVoiceTurnComplete?: () => void;
   }) {
     this.onStateChange = handlers.onStateChange;
     this.onTranscription = handlers.onTranscription;
@@ -143,6 +109,7 @@ export class MambaAudioSession {
     this.onMemorySync = handlers.onMemorySync;
     this.onReminder = handlers.onReminder;
     this.onTerminalOutput = handlers.onTerminalOutput;
+    this.onVoiceTurnComplete = handlers.onVoiceTurnComplete;
   }
 
   public sendText(text: string): void {
@@ -166,6 +133,10 @@ export class MambaAudioSession {
     return this.currentState;
   }
 
+  public isVoiceTurnActive(): boolean {
+    return this.voiceTurnActive;
+  }
+
   /**
    * Pushes a compressed JPEG base64 screenshot frame directly to the live WebSocket server.
    */
@@ -175,111 +146,52 @@ export class MambaAudioSession {
     }
   }
 
-  // Requests microphone and creates connections
+  /**
+   * Connect the transport: WebSocket + TTS output. No microphone is held.
+   */
   public async connect(voice?: string, avatarStyle?: "character" | "orb") {
     if (this.isActivated) return;
     this.isActivated = true;
     this.setState("connecting");
 
     try {
-      // 1. Establish custom WebSocket server bridge
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      
+
       const params = new URLSearchParams();
       if (voice) params.set("voice", voice);
       if (avatarStyle) params.set("avatarStyle", avatarStyle);
       const queryStr = params.toString() ? `?${params.toString()}` : "";
-      
+
       this.ws = new WebSocket(`${protocol}//${window.location.host}/live${queryStr}`);
-      this.ws.binaryType = "blob";
 
       this.ws.onopen = async () => {
-        console.log("[Elysia] Connected to server side WS bridge");
+        console.log("[Mamba] Connected to /live transport");
         try {
-          // Guard against early user disconnect during connection setup
           if (!this.isActivated) return;
 
-          // Safe, cross-browser AudioContext initialization
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
           if (!AudioContextClass) {
-            throw new Error("Holographic audio link unsupported: Web Audio API missing in browser.");
+            throw new Error("Voice unavailable: Web Audio API missing in this environment.");
           }
 
-          this.inputAudioCtx = new AudioContextClass({ sampleRate: 16000 });
           this.outputAudioCtx = new AudioContextClass({ sampleRate: 24000 });
-
-          // Ensure Audio Contexts are active and resumed to bypass browser security blocks
-          if (this.inputAudioCtx.state === "suspended") {
-            await this.inputAudioCtx.resume().catch(() => {});
-          }
           if (this.outputAudioCtx.state === "suspended") {
             await this.outputAudioCtx.resume().catch(() => {});
           }
-          
-          // Setup custom output Analyser & Volume Gains
+
           this.outputGainNode = this.outputAudioCtx.createGain();
           this.outputAnalyser = this.outputAudioCtx.createAnalyser();
           this.outputAnalyser.fftSize = 256;
           this.outputAnalyser.smoothingTimeConstant = 0.8;
-          
+
           this.outputGainNode.connect(this.outputAnalyser);
           this.outputAnalyser.connect(this.outputAudioCtx.destination);
-          
-          // Obtain User Microphone layout
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            }
-          });
 
-          // Safeguard: Check if we disconnected while waiting for user to grant mic permissions
-          if (!this.isActivated || !this.inputAudioCtx || !this.outputAudioCtx) {
-            stream.getTracks().forEach((track) => {
-              try {
-                track.stop();
-              } catch (e) {}
-            });
-            return;
-          }
-
-          this.micStream = stream;
-          
-          // Microphone remains continuously active
-
-          // Setup custom input Analyser
-          this.inputAnalyser = this.inputAudioCtx.createAnalyser();
-          this.inputAnalyser.fftSize = 256;
-          
-          this.micSourceNode = this.inputAudioCtx.createMediaStreamSource(this.micStream);
-          this.micSourceNode.connect(this.inputAnalyser);
-
-          // Stream input PCM 16-bit to WS
-          this.micProcessorNode = this.inputAudioCtx.createScriptProcessor(2048, 1, 1);
-          this.micSourceNode.connect(this.micProcessorNode);
-          this.micProcessorNode.connect(this.inputAudioCtx.destination);
-
-          this.micProcessorNode.onaudioprocess = (e) => {
-            if (this.currentState === "disconnected" || this.currentState === "connecting") return;
-            
-            const channelData = e.inputBuffer.getChannelData(0);
-            
-            // Convert to base64 Int16 Little Endian PCM
-            const pcmBuffer = floatTo16BitPCM(channelData);
-            const base64 = base64ArrayBuffer(pcmBuffer);
-            
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-              this.ws.send(JSON.stringify({ audio: base64 }));
-            }
-          };
-
-          // Sound setups are fully functional
-          this.setState("listening");
-
+          // Transport ready. Mic stays released until a voice turn starts.
+          this.setState("idle");
         } catch (audioError: any) {
-          console.error("Audio Context or Microphone Initialization Failed:", audioError);
-          this.onError(`Permission error: ${audioError.message || "Microphone required for holographic Live link."}`);
+          console.error("Output audio initialization failed:", audioError);
+          this.onError(`Audio error: ${audioError.message || "Could not initialize playback."}`);
           this.disconnect();
         }
       };
@@ -287,14 +199,19 @@ export class MambaAudioSession {
       this.ws.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
-          
+
           // Root Error Handler message
           if (data.type === "error") {
             this.onError(data.error);
-            this.disconnect();
+            if (this.voiceTurnActive) {
+              // Voice-turn failures end the turn, not the whole session.
+              this.completeVoiceTurn();
+            } else {
+              this.disconnect();
+            }
             return;
           }
-          
+
           // Shutdown Handler message
           if (data.type === "shutdown") {
             window.close();
@@ -306,8 +223,16 @@ export class MambaAudioSession {
           if (data.type === "status") {
             console.log("[Mamba WS Status]:", data.status);
             if (data.status === "connected") {
-              this.setState("listening");
-            } else if (data.status === "listening" || data.status === "thinking" || data.status === "speaking" || data.status === "permission" || data.status === "idle") {
+              if (!this.voiceTurnActive) this.setState("idle");
+            } else if (
+              data.status === "thinking" ||
+              data.status === "speaking" ||
+              data.status === "permission" ||
+              data.status === "idle"
+            ) {
+              // During a voice turn the turn lifecycle drives state; the
+              // server's trailing "listening" must not override "speaking".
+              if (data.status === "listening" && this.voiceTurnActive) return;
               this.setState(data.status);
             } else if (data.status === "session_closed") {
               this.disconnect();
@@ -329,23 +254,23 @@ export class MambaAudioSession {
             return;
           }
 
-          // Handle audio payload (24kHzPCM model response)
+          // Handle TTS audio payload: a COMPLETE audio blob (the provider
+          // returns whole audio, not a stream). Decoded format-agnostically.
           if (data.type === "audio" && data.audio) {
-            this.playAudioPCMChunk(data.audio);
+            await this.playAudioMessage(data.audio);
+            return;
           }
 
-          // Handle interruption signal
+          // Handle interruption signal (reserved for Phase C barge-in)
           if (data.type === "interrupted") {
             this.handleInterruption();
           }
 
           // Turn complete
           if (data.type === "turnComplete") {
-            setTimeout(() => {
-              if (this.activeSources.length === 0 && (this.currentState === "speaking" || this.currentState === "thinking")) {
-                this.setState("listening");
-              }
-            }, 100);
+            this.turnCompleteReceived = true;
+            this.maybeCompleteVoiceTurn();
+            return;
           }
 
           // Handle live captions transcription
@@ -379,7 +304,6 @@ export class MambaAudioSession {
             const { callId, name, args } = data;
             if (this.onToolCall) {
               this.onToolCall(name, args, (result) => {
-                // Send back execution result to server bridge
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                   this.ws.send(JSON.stringify({
                     type: "toolResponse",
@@ -399,7 +323,7 @@ export class MambaAudioSession {
 
       this.ws.onerror = (wsError) => {
         console.error("WebSocket transport error:", wsError);
-        this.onError("Holographic network link lost. Please check connection.");
+        this.onError("Connection lost. Please check the backend and retry.");
         this.disconnect();
       };
 
@@ -410,84 +334,290 @@ export class MambaAudioSession {
 
     } catch (e: any) {
       console.error("Connection establish sequence failed:", e);
-      this.onError(e.message || "Failed to initialize active channel.");
+      this.onError(e.message || "Failed to initialize transport.");
       this.disconnect();
     }
   }
 
-  // Interruption triggers: stops all active audio players immediately
+  /**
+   * Run a single voice turn: acquire the mic, play a listening cue, capture
+   * one VAD-segmented utterance, send it as a WAV-framed audio message.
+   * The turn completes when the server sends turnComplete AND any TTS
+   * playback has finished (see maybeCompleteVoiceTurn).
+   */
+  public async startVoiceTurn(): Promise<void> {
+    if (this.voiceTurnActive) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Transport not connected.");
+    }
+
+    this.voiceTurnActive = true;
+    this.turnCompleteReceived = false;
+    this.setState("listening");
+
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error("Web Audio API unavailable.");
+      }
+      this.inputAudioCtx = new AudioContextClass({ sampleRate: 16000 });
+      if (this.inputAudioCtx.state === "suspended") {
+        await this.inputAudioCtx.resume().catch(() => {});
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      if (!this.voiceTurnActive || !this.inputAudioCtx) {
+        stream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+        return;
+      }
+      this.micStream = stream;
+
+      this.inputAnalyser = this.inputAudioCtx.createAnalyser();
+      this.inputAnalyser.fftSize = 256;
+      this.micSourceNode = this.inputAudioCtx.createMediaStreamSource(this.micStream);
+      this.micSourceNode.connect(this.inputAnalyser);
+
+      // Listening cue so the user knows when to speak (backend is up by now).
+      this.playListeningCue();
+
+      const utterance = await this.captureUtterance();
+      // Mic is released as soon as capture ends — before the network round-trip.
+      this.releaseCapture();
+
+      if (!this.voiceTurnActive) return;
+
+      if (utterance.length === 0) {
+        // Nothing captured; end the turn quietly.
+        this.completeVoiceTurn();
+        return;
+      }
+
+      const base64 = wavToBase64(utterance, 16000);
+      this.ws.send(JSON.stringify({ type: "audio", format: "wav", audio: base64 }));
+      // Server now drives thinking -> (speaking) -> turnComplete.
+    } catch (err: any) {
+      console.error("Voice turn failed:", err);
+      this.onError(err?.message || "Microphone unavailable.");
+      this.completeVoiceTurn();
+    }
+  }
+
+  /** Capture one utterance with energy-based end-of-speech detection. */
+  private captureUtterance(): Promise<Float32Array> {
+    return new Promise((resolve) => {
+      const chunks: Float32Array[] = [];
+      let speechStarted = false;
+      let silenceMs = 0;
+      const startedAt = Date.now();
+      let lastChunkAt = Date.now();
+      let finished = false;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        try {
+          if (this.micProcessorNode) this.micProcessorNode.onaudioprocess = null;
+        } catch {}
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        const out = new Float32Array(total);
+        let off = 0;
+        for (const c of chunks) {
+          out.set(c, off);
+          off += c.length;
+        }
+        resolve(out);
+      };
+
+      const ctx = this.inputAudioCtx!;
+      const source = this.micSourceNode!;
+      this.micProcessorNode = ctx.createScriptProcessor(2048, 1, 1);
+      source.connect(this.micProcessorNode);
+      // ScriptProcessor requires a destination connection to run in some browsers.
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      this.micProcessorNode.connect(mute);
+      mute.connect(ctx.destination);
+
+      this.micProcessorNode.onaudioprocess = (e) => {
+        if (finished || !this.voiceTurnActive) {
+          finish();
+          return;
+        }
+        const now = Date.now();
+        const data = e.inputBuffer.getChannelData(0);
+        const copy = new Float32Array(data);
+
+        // RMS energy of this chunk.
+        let sum = 0;
+        for (let i = 0; i < copy.length; i++) sum += copy[i] * copy[i];
+        const rms = Math.sqrt(sum / copy.length);
+        const dt = now - lastChunkAt;
+        lastChunkAt = now;
+
+        if (rms >= VAD_START_THRESHOLD) {
+          speechStarted = true;
+          silenceMs = 0;
+          chunks.push(copy);
+        } else if (speechStarted) {
+          chunks.push(copy);
+          if (rms < VAD_END_THRESHOLD) {
+            silenceMs += dt;
+            if (silenceMs >= VAD_SILENCE_END_MS) {
+              finish();
+              return;
+            }
+          } else {
+            silenceMs = 0;
+          }
+        }
+        // Pre-speech audio is discarded; the listening cue tells the user
+        // when capture is live, so nothing before it matters.
+
+        if (now - startedAt >= VAD_MAX_TURN_MS) {
+          finish();
+        }
+      };
+
+      // Safety: never capture longer than the hard cap, even if the
+      // processor stalls.
+      setTimeout(() => finish(), VAD_MAX_TURN_MS + 2000);
+    });
+  }
+
+  /** Soft single blip: "I'm listening now." */
+  private playListeningCue(): void {
+    try {
+      if (!this.outputAudioCtx) return;
+      const ctx = this.outputAudioCtx;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.18);
+    } catch {
+      /* cue is best-effort */
+    }
+  }
+
+  /** Release per-turn capture resources (mic tracks, input graph). */
+  private releaseCapture(): void {
+    if (this.micProcessorNode) {
+      try {
+        this.micProcessorNode.onaudioprocess = null;
+        this.micProcessorNode.disconnect();
+      } catch {}
+      this.micProcessorNode = null;
+    }
+    if (this.micSourceNode) {
+      try {
+        this.micSourceNode.disconnect();
+      } catch {}
+      this.micSourceNode = null;
+    }
+    if (this.micStream) {
+      this.micStream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+      this.micStream = null;
+    }
+    if (this.inputAudioCtx) {
+      try {
+        this.inputAudioCtx.close();
+      } catch {}
+      this.inputAudioCtx = null;
+    }
+    this.inputAnalyser = null;
+  }
+
+  /**
+   * Play a complete TTS audio blob from the server. The blob is decoded
+   * format-agnostically (MP3/WAV/OGG) — the TTS provider returns whole
+   * audio, not a PCM stream.
+   */
+  private async playAudioMessage(base64Audio: string): Promise<void> {
+    if (!this.outputAudioCtx || !this.outputGainNode) return;
+    try {
+      this.setState("speaking");
+      const bytes = base64ToUint8Array(base64Audio);
+      // decodeAudioData detaches the buffer it decodes — decode a copy.
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      const audioBuffer: AudioBuffer = await this.outputAudioCtx.decodeAudioData(copy.buffer);
+
+      const source = this.outputAudioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.outputGainNode);
+      source.onended = () => {
+        const i = this.activeSources.indexOf(source);
+        if (i > -1) this.activeSources.splice(i, 1);
+        this.maybeCompleteVoiceTurn();
+      };
+      this.activeSources.push(source);
+      source.start();
+    } catch (playbackError) {
+      console.error("TTS playback failed:", playbackError);
+      this.maybeCompleteVoiceTurn();
+    }
+  }
+
+  /** End the turn once the server finished AND playback drained. */
+  private maybeCompleteVoiceTurn(): void {
+    if (!this.voiceTurnActive) return;
+    if (this.turnCompleteReceived && this.activeSources.length === 0) {
+      this.completeVoiceTurn();
+    }
+  }
+
+  private completeVoiceTurn(): void {
+    if (!this.voiceTurnActive) return;
+    this.voiceTurnActive = false;
+    this.turnCompleteReceived = false;
+    this.releaseCapture();
+    this.setState("idle");
+    try {
+      this.onVoiceTurnComplete?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Public: abandon the current voice turn (e.g. window closing). */
+  public endVoiceTurn(): void {
+    this.completeVoiceTurn();
+  }
+
+  // Interruption: stop all active playback immediately (reserved for barge-in).
   private handleInterruption() {
-    console.log("[Audio] Interruption signal received; flushing play logs.");
-    
-    // Stop all playing nodes
+    console.log("[Audio] Interruption signal received; stopping playback.");
     this.activeSources.forEach((source) => {
       try {
         source.stop();
-      } catch (err) {
+      } catch {
         // Already finished or stopped
       }
     });
     this.activeSources = [];
-    this.nextStartTime = 0;
-    
-    // Set state back to user listening
     this.setState("listening");
   }
 
-  // Direct raw PCM chunk scheduled playback at 24kHz
-  private playAudioPCMChunk(base64Audio: string) {
-    if (!this.outputAudioCtx || !this.outputGainNode) return;
-
-    try {
-      this.setState("speaking");
-      const uint8Array = base64ToUint8Array(base64Audio);
-      const floats = pcm16ToFloats(uint8Array);
-
-      // Create AudioBuffer of 24000Hz (the exact playback sample rate of Gemini outputs)
-      const buffer = this.outputAudioCtx.createBuffer(1, floats.length, 24000);
-      buffer.getChannelData(0).set(floats);
-
-      // Create Buffer source
-      const source = this.outputAudioCtx.createBufferSource();
-      source.buffer = buffer;
-
-      // Connect source to gain which is routed to analyser & speakers
-      source.connect(this.outputGainNode);
-
-      const currentTime = this.outputAudioCtx.currentTime;
-      
-      // Gapless scheduler sync
-      if (this.nextStartTime < currentTime) {
-        // Start fresh: 30ms ahead to bridge schedule timing
-        this.nextStartTime = currentTime + 0.03;
-      }
-
-      source.start(this.nextStartTime);
-      this.nextStartTime += buffer.duration;
-
-      // Keep reference to handle real-time interruptions
-      source.onended = () => {
-        const index = this.activeSources.indexOf(source);
-        if (index > -1) {
-          this.activeSources.splice(index, 1);
-        }
-        
-        // If there are no more active play nodes, revert state back to listening
-        if (this.activeSources.length === 0 && this.currentState === "speaking") {
-          this.setState("listening");
-        }
-      };
-
-      this.activeSources.push(source);
-
-    } catch (playbackError) {
-      console.error("PCM Chunk buffering/playback failed:", playbackError);
-    }
-  }
-
-  // Fully cleanup and release microphones & connection sockets
+  // Fully cleanup and release connection sockets
   public disconnect() {
+    const wasVoiceTurn = this.voiceTurnActive;
     this.isActivated = false;
+    this.voiceTurnActive = false;
+    this.turnCompleteReceived = false;
+    this.releaseCapture();
     this.setState("disconnected");
 
     // Close WS socket
@@ -498,54 +628,31 @@ export class MambaAudioSession {
       this.ws = null;
     }
 
-    // Stop and release user microphone streams
-    if (this.micStream) {
-      this.micStream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch (e) {}
-      });
-      this.micStream = null;
-    }
-
-    // Disconnect routing nodes
-    if (this.micProcessorNode) {
+    // Stop any playback
+    this.activeSources.forEach((source) => {
       try {
-        this.micProcessorNode.disconnect();
-      } catch (e) {}
-      this.micProcessorNode = null;
-    }
+        source.stop();
+      } catch {}
+    });
 
-    if (this.micSourceNode) {
-      try {
-        this.micSourceNode.disconnect();
-      } catch (e) {}
-      this.micSourceNode = null;
-    }
-
-    // Close Audio contexts
-    if (this.inputAudioCtx) {
-      try {
-        this.inputAudioCtx.close();
-      } catch (e) {}
-      this.inputAudioCtx = null;
-    }
-
+    // Close output context
     if (this.outputAudioCtx) {
       try {
         this.outputAudioCtx.close();
       } catch (e) {}
       this.outputAudioCtx = null;
     }
-    
-    window.removeEventListener("keydown", this.handleKeyDown);
-    window.removeEventListener("keyup", this.handleKeyUp);
 
     this.activeSources = [];
-    this.nextStartTime = 0;
     this.inputAnalyser = null;
     this.outputAnalyser = null;
     this.outputGainNode = null;
+
+    if (wasVoiceTurn) {
+      try {
+        this.onVoiceTurnComplete?.();
+      } catch {}
+    }
   }
 }
 

@@ -25,22 +25,33 @@ TTS Provider (Cloudflare Workers AI Aura-1)
 Speaker (Audio Playback)
 ```
 
-## 1b. Voice Flow (Desktop App)
+## 1b. Voice Flow (Desktop App) — Phase A (one-turn)
 
 ```
-Browser microphone (16 kHz PCM)
-  │  WebSocket /live  {"type": "audio", "audio": "<base64 PCM>"}
+Orb renderer (DORMANT): wake listener (src/wake/) hears "hey mamba"
+  │  IPC mamba:wake-detected  →  shell activates session (existing lifecycle)
   ▼
-api/server.py — transcribes via the server-side STT provider
+Main window: one voice turn — listening cue → VAD captures ONE utterance
+  │  WebSocket /live  {"type": "audio", "format": "wav", "audio": "<base64 WAV>"}
+  ▼
+api/server.py — validates WAV framing, transcribes (Groq STT)
   │  {"type": "transcription", "role": "user", "text": "…"}
   ▼
-MambaRuntime (identical Core lifecycle as the CLI)
+MambaRuntime (identical Core lifecycle as the CLI; request tagged input_modality="voice")
   │  {"type": "transcription", "role": "model", "text": "…"}
   ▼
-React UI transcript (+ optional local speech; server TTS is CLI-side)
+Server synthesizes the reply (Cloudflare TTS) and returns the COMPLETE
+audio blob — no streaming:  {"type": "audio", "format": "mp3", "audio": "…"}
+  ▼
+Renderer decodes + plays it; playback end + turnComplete → mic released,
+turn ends. No continuous conversation (Phase B), no barge-in (Phase C).
 ```
 
-The desktop path reuses the same transport adapter and Core — no separate voice brain.
+The desktop path reuses the same transport adapter and Core — no separate voice brain. The wake listener is a desktop interaction service hosted by the Orb renderer (the only renderer alive while DORMANT); the Orb itself stays presentation-only.
+
+**Wake engine (interim):** the current backend is the browser Web Speech API wrapped in a swappable `WakeEngine` interface (`src/wake/`). It exists so the one-turn pipeline can be proven end-to-end. Do NOT bundle a keyword-spotter model until availability, licensing, Electron/Chromium compatibility, DORMANT CPU usage, and "Hey Mamba" accuracy are all established.
+
+**Voice approval policy (conservative):** voice-originated requests are tagged `input_modality="voice"`. A spoken "yes" NEVER approves a pending HIGH-risk action — the user must confirm visually (SudoPopup click) or by typed approval. The pending approval survives a rejected voice approval. Voice "no"/"cancel" still cancels (safe direction).
 
 ---
 
@@ -72,7 +83,7 @@ Switching to voice interface...
 ```
 
 ### Desktop App
-Use the microphone button in the React UI, or enable the wake-word detector in settings (browser Web Speech API, default phrase **"hey mamba"**, configurable sensitivity). A text-chat fallback panel is available when no microphone is present.
+Click the Orb presence (or say the wake phrase while dormant) to run a single voice turn: a listening cue plays, one utterance is captured, Mamba answers by voice, and the mic is released. Enable/disable wake-word listening in Settings (default phrase **"hey mamba"**, configurable sensitivity). A text-chat fallback panel is available when no microphone is present.
 
 ---
 
@@ -86,7 +97,7 @@ Once voice mode is active (CLI):
 
 To exit voice mode, type `exit` or `text` to return to the text CLI.
 
-`VoiceInterface.process_voice_input()` is the shared entry point used by both the CLI loop and the `POST /api/voice` transport endpoint. On the transport path, `speak_response=False` — transcription and execution happen server-side while audio playback stays client-side.
+`VoiceInterface.process_voice_input()` is the shared entry point used by the CLI loop, the `POST /api/voice` endpoint, and the `/live` WebSocket voice-turn branch. On transport paths, `speak_response=False` — transcription and execution happen server-side while audio playback stays client-side (`synthesize_speech_text()` returns a `(format, bytes)` blob for the socket; it never raises).
 
 ---
 
