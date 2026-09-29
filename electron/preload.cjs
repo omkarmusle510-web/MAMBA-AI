@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld("mambaDesktop", {
   platform: process.platform,
   version: "1.0.0",
   getLifecycleState: () => ipcRenderer.sendSync("mamba:get-lifecycle-state"),
+  getAutoStart: () => ipcRenderer.sendSync("mamba:get-autostart") === true,
+  setAutoStart: (enabled) => ipcRenderer.sendSync("mamba:set-autostart", enabled === true) === true,
   onLifecycleState: (callback) => {
     if (typeof callback !== "function") return () => {};
     const handler = (_event, state) => callback(state);

@@ -3,6 +3,8 @@ export interface MambaDesktopAPI {
   platform: string;
   version: string;
   getLifecycleState?: () => string;
+  getAutoStart?: () => boolean;
+  setAutoStart?: (enabled: boolean) => boolean;
   onLifecycleState?: (callback: (state: string) => void) => () => void;
   reportActivity?: (type: string) => void;
   reportTaskState?: (active: boolean) => void;

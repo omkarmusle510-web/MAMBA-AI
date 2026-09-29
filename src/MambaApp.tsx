@@ -5,6 +5,7 @@ import { MambaAudioSession, LiveState } from "./audio";
 import { MambaWakeWordDetector } from "./wakeWord";
 import { MambaPresence, MambaPresenceState } from "./MambaPresence";
 import { SudoPopup } from "./SudoPopup";
+import { SettingsPanel } from "./SettingsPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { TextChatFallback } from "./TextChatFallback";
 import { ToastContainer, useToast } from "./Toast";
@@ -28,6 +29,21 @@ export const MambaApp: React.FC = () => {
   const [isTextChatOpen, setIsTextChatOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState<string | null>(null);
 
+  // Settings panel & Windows startup preference.
+  // The OS login-item registration is the source of truth; the settings
+  // store mirrors it for UI consistency.
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [autoStart, setAutoStart] = useState<boolean>(() => {
+    try {
+      if (window.mambaDesktop?.getAutoStart) {
+        return window.mambaDesktop.getAutoStart() === true;
+      }
+    } catch {
+      /* bridge unavailable — fall through to stored preference */
+    }
+    return loadSettings().autoStart === true;
+  });
+
   // Sudo / Permission Requests from Mamba
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
@@ -44,6 +60,22 @@ export const MambaApp: React.FC = () => {
       window.mambaDesktop.reportState(liveState);
     }
   }, [liveState]);
+
+  // Keep the persisted settings mirror in sync with the OS startup registration.
+  useEffect(() => {
+    try {
+      if (window.mambaDesktop?.getAutoStart) {
+        const osState = window.mambaDesktop.getAutoStart() === true;
+        setAutoStart(osState);
+        setSettings((prev) =>
+          prev.autoStart === osState ? prev : saveSettings({ autoStart: osState })
+        );
+      }
+    } catch {
+      /* non-desktop context — nothing to sync */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Initialize session and wake word detector
   useEffect(() => {
@@ -119,6 +151,26 @@ export const MambaApp: React.FC = () => {
     addToast("Action rejected", "info");
   };
 
+  // Handle the "Start Mamba with Windows" toggle.
+  const handleAutoStartChange = (enabled: boolean) => {
+    let applied = enabled;
+    try {
+      if (window.mambaDesktop?.setAutoStart) {
+        applied = window.mambaDesktop.setAutoStart(enabled) === true;
+      }
+    } catch {
+      applied = enabled; // bridge unavailable: persist the preference only
+    }
+    setAutoStart(applied);
+    setSettings(saveSettings({ autoStart: applied }));
+    addToast(
+      applied
+        ? "Mamba will start with Windows (dormant at login)."
+        : "Mamba will no longer start with Windows.",
+      "info"
+    );
+  };
+
   // Handle text message submission
   const handleMessageSubmit = (message: string) => {
     if (!message.trim()) return;
@@ -161,6 +213,15 @@ export const MambaApp: React.FC = () => {
         pendingRequests={pendingRequests}
         onApprove={handleApprove}
         onReject={handleReject}
+      />
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        autoStart={autoStart}
+        onAutoStartChange={handleAutoStartChange}
+        isDesktop={Boolean(window.mambaDesktop?.isDesktop)}
       />
 
       {/* Header Bar */}
@@ -206,6 +267,19 @@ export const MambaApp: React.FC = () => {
             title="Toggle Text Input"
           >
             <Volume2 className="w-4 h-4" />
+          </button>
+
+          {/* Settings toggle */}
+          <button
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            className={`p-2.5 rounded-xl border transition ${
+              isSettingsOpen
+                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+            }`}
+            title="Settings"
+          >
+            <Settings className="w-4 h-4" />
           </button>
         </div>
       </div>

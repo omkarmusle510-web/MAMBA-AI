@@ -203,6 +203,33 @@ function quitApp() {
   app.quit();
 }
 
+// ---- Windows startup (login item) ----
+// Uses Electron's built-in login-item support. On Windows this registers the
+// current executable under HKCU\Software\Microsoft\Windows\CurrentVersion\Run.
+// No launcher, daemon, Windows service, or second lifecycle system is created:
+// Windows simply starts the Electron shell, which boots DORMANT by design
+// (see bootApp), so the Python backend is NOT started at login.
+// Note: in dev mode (`npm run electron`) process.execPath is the Electron
+// binary itself; the registration is meaningful for the packaged desktop app.
+function isAutoStartEnabled() {
+  try {
+    return app.getLoginItemSettings().openAtLogin === true;
+  } catch (err) {
+    console.warn("[Mamba Shell] Could not query login item settings:", err.message);
+    return false;
+  }
+}
+
+function setAutoStartEnabled(enabled) {
+  const want = enabled === true;
+  try {
+    app.setLoginItemSettings({ openAtLogin: want });
+  } catch (err) {
+    console.error("[Mamba Shell] Failed to update login item settings:", err.message);
+  }
+  return isAutoStartEnabled();
+}
+
 function createMainWindow() {
   const iconPath = path.join(__dirname, "assets", "icon.png");
 
@@ -378,6 +405,14 @@ function setupIpc() {
   ipcMain.on("mamba:get-lifecycle-state", (event) => {
     event.returnValue = lifecycleManager ? lifecycleManager.getState() : LifecycleState.DORMANT;
   });
+
+  ipcMain.on("mamba:get-autostart", (event) => {
+    event.returnValue = isAutoStartEnabled();
+  });
+
+  ipcMain.on("mamba:set-autostart", (event, enabled) => {
+    event.returnValue = setAutoStartEnabled(enabled === true);
+  });
 }
 
 async function bootApp() {
@@ -449,6 +484,14 @@ async function bootApp() {
   console.log(`[Mamba Shell] Initialized in DORMANT state. Backend is not running.`);
   console.log(`[Mamba Shell] Floating Orb window running. Main window hidden.`);
   console.log(`[Mamba Shell] Idle timeout configured: ${lifecycleManager.idleTimeoutMs / 1000}s`);
+
+  // Diagnosability only: login-item launches boot identically (DORMANT,
+  // backend stopped). No behavior change here by design.
+  try {
+    if (app.getLoginItemSettings().wasOpenedAtLogin) {
+      console.log("[Mamba Shell] Launched at user login — entering DORMANT (backend stays stopped).");
+    }
+  } catch {}
 
   // 6. Run automated test if --smoke-test passed
   if (isSmokeTest) {
