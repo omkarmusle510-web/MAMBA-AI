@@ -36,15 +36,21 @@ export const FloatingOrb: React.FC = () => {
 
   return (
     <div
-      className="relative w-screen h-screen flex items-center justify-center select-none overflow-hidden bg-transparent"
+      className="relative flex items-center justify-center select-none bg-transparent"
       style={{
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
         WebkitAppRegion: "drag",
         userSelect: "none",
         background: "transparent",
       } as React.CSSProperties}
     >
       {/* 3D Orb Visual Canvas Layer - pointer-events: none so it doesn't block window dragging from transparent areas */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-transparent">
+      <div
+        className="absolute inset-0 flex items-center justify-center pointer-events-none bg-transparent"
+        style={{ width: "100%", height: "100%", overflow: "hidden" }}
+      >
         <MambaPresence
           state={presenceState}
           variant="orb"

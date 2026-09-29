@@ -73,7 +73,7 @@ export const OrbView: React.FC<OrbViewProps> = ({
 
   return (
     <div
-      style={{ width: size, height: size, background: "transparent" }}
+      style={{ width: size, height: size, background: "transparent", overflow: "hidden" }}
       className={`relative flex items-center justify-center pointer-events-none bg-transparent ${className}`}
     >
       <canvas
