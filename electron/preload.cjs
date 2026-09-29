@@ -20,6 +20,18 @@ contextBridge.exposeInMainWorld("mambaDesktop", {
   notifyWakeDetected: () => ipcRenderer.send("mamba:wake-detected"),
   // TEMP DIAG: forward wake diagnostics from the orb renderer to the terminal.
   reportWakeDiag: (message) => ipcRenderer.send("mamba:wake-diag", String(message)),
+  // Wake-word KWS service (main process): the sherpa-onnx WASM build needs
+  // Node (NODERAWFS) and cannot run in this renderer. The renderer captures
+  // mic audio and streams PCM chunks to main; main reports detections back.
+  wakeKwsInit: (opts) => ipcRenderer.invoke("mamba:wake-kws-init", opts || {}),
+  wakeKwsAudioChunk: (samples) => ipcRenderer.send("mamba:wake-kws-audio", samples),
+  wakeKwsStop: () => ipcRenderer.send("mamba:wake-kws-stop"),
+  onWakeKwsDetected: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const handler = (_event, keyword) => callback(keyword);
+    ipcRenderer.on("mamba:wake-kws-detected", handler);
+    return () => ipcRenderer.removeListener("mamba:wake-kws-detected", handler);
+  },
   onVoiceTurnRequest: (callback) => {
     if (typeof callback !== "function") return () => {};
     const handler = () => callback();

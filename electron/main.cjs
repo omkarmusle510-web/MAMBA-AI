@@ -478,6 +478,42 @@ function setupIpc() {
     console.log("[WakeDiag:orb]", String(message).replace(/^\[WakeDiag\] /, ""));
   });
 
+  // Wake-word KWS service (main process): the sherpa-onnx WASM build requires
+  // Emscripten NODERAWFS, which is Node-only and cannot run in the Chromium
+  // renderer. The orb renderer captures mic audio and streams PCM chunks
+  // here; detections are forwarded back to the orb renderer, which owns the
+  // WakeController and the existing activation path.
+  const wakeKws = require("./wakeKws.cjs");
+
+  ipcMain.handle("mamba:wake-kws-init", async (_event, opts) => {
+    try {
+      return await wakeKws.init(opts || {});
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+
+  ipcMain.on("mamba:wake-kws-audio", (_event, samples) => {
+    let keyword = null;
+    try {
+      keyword = wakeKws.acceptAudio(samples);
+    } catch (err) {
+      console.error("[WakeKWS] audio handler error:", (err && err.message) || err);
+    }
+    if (keyword && orbWindow && !orbWindow.isDestroyed()) {
+      // TEMP DIAG: detection happened in the main process; hand it to the
+      // orb renderer's WakeController, which runs the existing trigger path.
+      console.log(`[WakeDiag] wake-kws detected "${keyword}" in main process -> notifying orb renderer`);
+      orbWindow.webContents.send("mamba:wake-kws-detected", keyword);
+    }
+  });
+
+  ipcMain.on("mamba:wake-kws-stop", () => {
+    try {
+      wakeKws.stop();
+    } catch {}
+  });
+
   // Wake-word setting changed in the main-window Settings panel: forward to
   // the orb renderer, which hosts the wake listener.
   ipcMain.on("mamba:wake-setting-changed", (event, enabled) => {

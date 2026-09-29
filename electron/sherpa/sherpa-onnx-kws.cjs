@@ -360,8 +360,9 @@ function createKws(Module, myConfig) {
   return new Kws(configObj, Module);
 }
 
-// MAMBA PROTOTYPE ADAPTATION (sherpa-onnx 1.13.8):
-// The upstream file guards module.exports behind a Node.js runtime check,
-// which is false inside the Electron renderer (nodeIntegration: false).
-// Replaced with a plain ESM export; everything else is byte-identical.
-export {createKws};
+if (typeof process == 'object' && typeof process.versions == 'object' &&
+    typeof process.versions.node == 'string') {
+  module.exports = {
+    createKws,
+  };
+}

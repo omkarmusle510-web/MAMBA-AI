@@ -1,17 +1,20 @@
 /**
  * LOCAL wake-word engine backend: sherpa-onnx keyword spotting (prototype).
  *
- * Fully offline: a streaming Zipformer KWS model (int8, ~6 MB) runs inside
- * the Electron renderer via the vendored sherpa-onnx WASM build. No cloud
- * speech service, no Google API, no API key, no network.
+ * Architecture: the sherpa-onnx WASM build requires Emscripten NODERAWFS,
+ * which is only supported in a Node.js environment — it cannot initialize
+ * inside the Chromium renderer (nodeIntegration: false). So the spotter
+ * itself runs in the Electron MAIN process (electron/wakeKws.cjs, plain
+ * Node.js). This renderer-side engine only:
+ *   1. captures microphone audio locally (16 kHz),
+ *   2. streams PCM chunks to main over IPC,
+ *   3. receives "wake-kws-detected" from main and fires the trigger.
  *
- * Pinned artifacts: see public/wake/VERSIONS.md
- *   - sherpa-onnx npm 1.13.8 (JS glue + WASM vendored under src/wake/sherpa/)
- *   - sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 (English, int8)
- *   - keywords.txt: "HEY MAMBA" -> BPE tokens via documented text2token
+ * Fully offline: pinned int8 Zipformer model, no cloud, no API key, no
+ * network. See public/wake/VERSIONS.md for pinned artifacts.
  *
  * Audio: microphone -> 16 kHz AudioContext -> ScriptProcessor pump ->
- * stream.acceptWaveform(). Nothing is recorded, persisted, or sent anywhere.
+ * IPC to main. Nothing is recorded, persisted, or sent anywhere else.
  * The mic is released when the engine stops (e.g. on trigger, when the
  * Phase A voice session takes over).
  *
@@ -21,39 +24,10 @@
 import type { WakeEngine, WakeEngineOptions, WakeEngineState } from "./types";
 import { wakeDiag } from "./diag";
 
-// Vendored sherpa-onnx 1.13.8 (no type declarations; ESM-adapted, see file headers).
-// @ts-ignore: vendored JS without types
-import createSherpaModule from "./sherpa/sherpa-onnx-wasm-nodejs.js";
-// @ts-ignore: vendored JS without types
-import { createKws } from "./sherpa/sherpa-onnx-kws.js";
-// @ts-ignore: vendored JS without types
-import pathPosix from "./sherpa/path-browserify.js";
-
 const SUPPORTED_PHRASE = "hey mamba";
 const SAMPLE_RATE = 16000;
 const PUMP_CHUNK = 4096; // ~256 ms at 16 kHz
 const TRIGGER_DEBOUNCE_MS = 4000;
-
-const ASSET = {
-  wasm: "wake/sherpa-onnx-wasm-nodejs.wasm",
-  encoder: "wake/kws/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
-  decoder: "wake/kws/decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
-  joiner: "wake/kws/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
-  tokens: "wake/kws/tokens.txt",
-  keywords: "wake/kws/keywords.txt",
-};
-
-async function fetchBytes(url: string): Promise<Uint8Array> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url} -> HTTP ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
-}
-
-async function fetchText(url: string): Promise<string> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url} -> HTTP ${res.status}`);
-  return await res.text();
-}
 
 export class SherpaOnnxWakeEngine implements WakeEngine {
   private phrase = SUPPORTED_PHRASE;
@@ -65,9 +39,7 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
   private active = false;
   private lastTrigger = 0;
 
-  private Module: any = null;
-  private kws: any = null;
-  private stream: any = null;
+  private removeDetectionListener: (() => void) | null = null;
 
   private micStream: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
@@ -78,9 +50,9 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     if (typeof window === "undefined") return false;
     const w = window as any;
     return (
-      typeof WebAssembly !== "undefined" &&
       !!navigator?.mediaDevices?.getUserMedia &&
-      !!(w.AudioContext || w.webkitAudioContext)
+      !!(w.AudioContext || w.webkitAudioContext) &&
+      typeof window.mambaDesktop?.wakeKwsInit === "function"
     );
   }
 
@@ -107,7 +79,7 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.phrase = phrase;
 
     if (!this.isSupported()) {
-      wakeDiag(`sherpa engine.start() FAILED: WebAssembly/getUserMedia/AudioContext unavailable`);
+      wakeDiag(`sherpa engine.start() FAILED: mic/AudioContext or main-process KWS bridge unavailable`);
       this.setState("error");
       return false;
     }
@@ -115,13 +87,25 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.intended = true;
     this.setState("loading");
     try {
-      await this.initKws();
+      // The spotter runs in the main process (Node). Init is lazy and takes
+      // ~2s the first time (WASM + model load); instant on re-arm.
+      wakeDiag(`sherpa engine: requesting KWS init in main process ...`);
+      const res = await window.mambaDesktop!.wakeKwsInit!({ threshold: this.threshold() });
       if (!this.intended) return false; // stopped during init
+      if (!res || res.ok !== true) {
+        throw new Error(`main-process KWS init failed: ${(res && res.error) || "unknown error"}`);
+      }
+      wakeDiag(`sherpa engine: main-process KWS READY`);
+
+      this.removeDetectionListener = window.mambaDesktop!.onWakeKwsDetected!((keyword) =>
+        this.handleRemoteDetection(keyword)
+      );
+
       await this.startMic();
       if (!this.intended) return false;
       this.active = true;
       this.setState("listening");
-      wakeDiag(`sherpa engine: listening for "${this.phrase}" (threshold=${this.threshold().toFixed(2)})`);
+      wakeDiag(`sherpa engine: listening for "${this.phrase}" (mic -> main-process KWS)`);
       return true;
     } catch (err: any) {
       wakeDiag(`sherpa engine.start() FAILED: ${err?.message || err}`);
@@ -134,6 +118,15 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
   stop(): void {
     wakeDiag(`sherpa engine.stop() called`);
     this.intended = false;
+    if (this.removeDetectionListener) {
+      try {
+        this.removeDetectionListener();
+      } catch {}
+      this.removeDetectionListener = null;
+    }
+    try {
+      window.mambaDesktop?.wakeKwsStop?.();
+    } catch {}
     this.teardown();
     this.setState("stopped");
   }
@@ -149,79 +142,6 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
   /** sensitivity 0..100 -> KWS threshold 0.45 (strict) .. 0.10 (loose). */
   private threshold(): number {
     return 0.45 - (this.sensitivity / 100) * 0.35;
-  }
-
-  private async initKws(): Promise<void> {
-    const base = window.location.origin;
-    wakeDiag(`sherpa engine: fetching WASM + model from ${base}/wake/ ...`);
-
-    const [wasmBinary, encoder, decoder, joiner, tokens, keywords] = await Promise.all([
-      fetchBytes(`${base}/${ASSET.wasm}`),
-      fetchBytes(`${base}/${ASSET.encoder}`),
-      fetchBytes(`${base}/${ASSET.decoder}`),
-      fetchBytes(`${base}/${ASSET.joiner}`),
-      fetchText(`${base}/${ASSET.tokens}`),
-      fetchText(`${base}/${ASSET.keywords}`),
-    ]);
-    wakeDiag(
-      `sherpa engine: assets fetched (wasm=${(wasmBinary.length / 1e6).toFixed(1)}MB, ` +
-        `encoder=${(encoder.length / 1e6).toFixed(1)}MB)`
-    );
-
-    const t0 = Date.now();
-    // The vendored Emscripten NODE build calls require("path") unconditionally
-    // inside its factory (Emscripten's PATH helpers). The renderer has no
-    // require(), so install a minimal scoped shim for "path" only, then
-    // remove it: the factory captures the path functions in its FS closure
-    // at call time and never consults require() again.
-    const g = globalThis as any;
-    const prevRequire = g.require;
-    g.require = (id: string) => {
-      if (id === "path") return pathPosix;
-      throw new Error(`[sherpa] require("${id}") is not available in the renderer`);
-    };
-    try {
-      this.Module = await createSherpaModule({ wasmBinary });
-    } finally {
-      if (prevRequire === undefined) delete g.require;
-      else g.require = prevRequire;
-    }
-    const FS = this.Module.FS;
-    try {
-      FS.mkdir("/kws");
-    } catch {
-      /* already exists */
-    }
-    FS.writeFile("/kws/encoder.onnx", encoder);
-    FS.writeFile("/kws/decoder.onnx", decoder);
-    FS.writeFile("/kws/joiner.onnx", joiner);
-    FS.writeFile("/kws/tokens.txt", new TextEncoder().encode(tokens));
-    wakeDiag(`sherpa engine: WASM ready in ${Date.now() - t0}ms, model written to virtual FS`);
-
-    const t1 = Date.now();
-    this.kws = createKws(this.Module, {
-      featConfig: { samplingRate: SAMPLE_RATE, featureDim: 80 },
-      modelConfig: {
-        transducer: {
-          encoder: "/kws/encoder.onnx",
-          decoder: "/kws/decoder.onnx",
-          joiner: "/kws/joiner.onnx",
-        },
-        tokens: "/kws/tokens.txt",
-        provider: "cpu",
-        modelType: "",
-        numThreads: 1,
-        debug: 0,
-        modelingUnit: "bpe",
-      },
-      maxActivePaths: 4,
-      numTrailingBlanks: 1,
-      keywordsScore: 1.0,
-      keywordsThreshold: this.threshold(),
-      keywords: keywords,
-    });
-    this.stream = this.kws.createStream();
-    wakeDiag(`sherpa engine: KWS created in ${Date.now() - t1}ms`);
   }
 
   private async startMic(): Promise<void> {
@@ -262,30 +182,21 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.processorNode.onaudioprocess = (e) => {
       if (!this.intended) return;
       const data = e.inputBuffer.getChannelData(0);
-      this.pump(new Float32Array(data));
+      // Stream PCM to the main-process spotter (fire-and-forget IPC).
+      try {
+        window.mambaDesktop?.wakeKwsAudioChunk?.(new Float32Array(data));
+      } catch (err: any) {
+        wakeDiag(`sherpa engine: audio chunk send failed: ${err?.message || err}`);
+      }
     };
-    wakeDiag(`sherpa engine: microphone acquired, pump running`);
+    wakeDiag(`sherpa engine: microphone acquired, streaming to main process`);
   }
 
-  /** Feed one audio chunk through the keyword spotter. */
-  private pump(samples: Float32Array): void {
-    if (!this.kws || !this.stream || !this.intended) return;
-    try {
-      this.stream.acceptWaveform(SAMPLE_RATE, samples);
-      while (this.kws.isReady(this.stream)) {
-        this.kws.decode(this.stream);
-      }
-      const result = this.kws.getResult(this.stream);
-      if (result && typeof result.keyword === "string" && result.keyword.length > 0) {
-        wakeDiag(`sherpa KWS detected keyword: "${result.keyword}"`);
-        try {
-          this.kws.reset(this.stream);
-        } catch {}
-        this.fire();
-      }
-    } catch (err: any) {
-      wakeDiag(`sherpa engine: pump error: ${err?.message || err}`);
-    }
+  /** A detection arrived from the main-process spotter. */
+  private handleRemoteDetection(keyword: string): void {
+    if (!this.intended) return;
+    wakeDiag(`sherpa engine: main process detected keyword "${keyword}"`);
+    this.fire();
   }
 
   private fire(): void {
@@ -362,19 +273,6 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
       } catch {}
       this.audioCtx = null;
     }
-    if (this.stream) {
-      try {
-        this.stream.free();
-      } catch {}
-      this.stream = null;
-    }
-    if (this.kws) {
-      try {
-        this.kws.free();
-      } catch {}
-      this.kws = null;
-    }
-    this.Module = null;
   }
 
   private setState(s: WakeEngineState): void {
