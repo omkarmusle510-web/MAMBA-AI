@@ -36,26 +36,37 @@ export const FloatingOrb: React.FC = () => {
 
   return (
     <div
-      className="w-screen h-screen flex items-center justify-center select-none overflow-hidden bg-transparent"
+      className="relative w-screen h-screen flex items-center justify-center select-none overflow-hidden bg-transparent"
       style={{
         WebkitAppRegion: "drag",
         userSelect: "none",
+        background: "transparent",
       } as React.CSSProperties}
     >
-      <div
-        style={{
-          WebkitAppRegion: "no-drag",
-        } as React.CSSProperties}
-        title="Mamba AI — Click to activate"
-      >
+      {/* 3D Orb Visual Canvas Layer - pointer-events: none so it doesn't block window dragging from transparent areas */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-transparent">
         <MambaPresence
           state={presenceState}
           variant="orb"
-          size={175}
+          size={220}
           showLabel={false}
-          onClick={handleClick}
         />
       </div>
+
+      {/* Central interactive click target right over the core and inner particle area */}
+      <div
+        onClick={handleClick}
+        style={{
+          width: 120,
+          height: 120,
+          borderRadius: "50%",
+          WebkitAppRegion: "no-drag",
+          cursor: "pointer",
+          zIndex: 10,
+          background: "transparent",
+        } as React.CSSProperties}
+        title="Mamba AI — Click to activate"
+      />
     </div>
   );
 };

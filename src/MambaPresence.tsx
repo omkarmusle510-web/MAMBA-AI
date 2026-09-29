@@ -95,39 +95,31 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
         style={{ width: size, height: size }}
         className="relative flex items-center justify-center"
       >
-        {/* Outermost ambient glow */}
-        <motion.div
-          className="absolute inset-0 rounded-full blur-3xl pointer-events-none"
-          style={{ background: config.glow }}
-          animate={{
-            scale: state === "listening" ? [1, 1.3, 1] : state === "thinking" ? [1, 1.2, 1] : [1, 1.08, 1],
-            opacity: state === "listening" ? [0.6, 0.9, 0.6] : [0.3, 0.6, 0.3],
-          }}
-          transition={{
-            duration: state === "listening" ? 1.8 : state === "thinking" ? 1.2 : 4,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
+        {/* Outermost ambient glow - only for 2D pulse/circle variants */}
+        {variant !== "orb" && (
+          <motion.div
+            className="absolute inset-0 rounded-full blur-3xl pointer-events-none"
+            style={{ background: config.glow }}
+            animate={{
+              scale: state === "listening" ? [1, 1.3, 1] : state === "thinking" ? [1, 1.2, 1] : [1, 1.08, 1],
+              opacity: state === "listening" ? [0.6, 0.9, 0.6] : [0.3, 0.6, 0.3],
+            }}
+            transition={{
+              duration: state === "listening" ? 1.8 : state === "thinking" ? 1.2 : 4,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }}
+          />
+        )}
 
         {variant === "orb" ? (
-          <div className="relative z-10 flex items-center justify-center">
+          <div className="relative z-10 flex items-center justify-center bg-transparent">
             <OrbView
               state={state}
               inputNode={inputNode}
               outputNode={outputNode}
               size={size}
             />
-            {state === "permission" && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <ShieldAlert className="w-12 h-12 text-amber-400 drop-shadow-[0_0_15px_rgba(245,158,11,0.8)] animate-pulse" />
-              </div>
-            )}
-            {state === "error" && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <AlertTriangle className="w-12 h-12 text-rose-400 drop-shadow-[0_0_15px_rgba(244,63,94,0.8)] animate-bounce" />
-              </div>
-            )}
           </div>
         ) : (
           /* Pulse / Ring Visual Representation */

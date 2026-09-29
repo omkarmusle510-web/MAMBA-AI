@@ -73,16 +73,20 @@ export const OrbView: React.FC<OrbViewProps> = ({
 
   return (
     <div
-      style={{ width: size, height: size }}
-      className={`relative overflow-hidden flex items-center justify-center rounded-full pointer-events-none ${className}`}
+      style={{ width: size, height: size, background: "transparent" }}
+      className={`relative flex items-center justify-center pointer-events-none bg-transparent ${className}`}
     >
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "block",
+          background: "transparent",
+        }}
       />
     </div>
   );
 };
 
 export default OrbView;
-
