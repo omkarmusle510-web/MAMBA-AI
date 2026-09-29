@@ -10,7 +10,7 @@
  * interim backend and the evaluation gate before adopting a local model.
  */
 
-export type WakeEngineState = "stopped" | "listening" | "triggered" | "error";
+export type WakeEngineState = "stopped" | "loading" | "listening" | "triggered" | "error";
 
 export interface WakeEngineOptions {
   /** Phrase to match (case-insensitive substring). */

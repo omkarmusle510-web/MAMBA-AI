@@ -12,7 +12,7 @@
  * microphone for command capture. Re-arm via rearm().
  */
 import type { WakeEngine, WakeEngineState } from "./types";
-import { WebSpeechWakeEngine } from "./webSpeechEngine";
+import { SherpaOnnxWakeEngine } from "./sherpaOnnxEngine";
 import { wakeDiag } from "./diag";
 
 export interface WakeControllerOptions {
@@ -31,9 +31,10 @@ export class WakeController {
 
   constructor(opts: WakeControllerOptions = {}, engine?: WakeEngine) {
     this.opts = opts;
-    // Engine backend is swappable; the interim Web Speech backend lets the
-    // one-turn pipeline be proven before a local engine is evaluated.
-    this.engine = engine ?? new WebSpeechWakeEngine();
+    // Local sherpa-onnx keyword spotter (WASM, offline). The Web Speech
+    // backend proved unreliable inside Electron and is NOT used as a
+    // fallback: if sherpa fails to initialize, the engine reports "error".
+    this.engine = engine ?? new SherpaOnnxWakeEngine();
   }
 
   /** Whether a wake engine can run in this environment at all. */
