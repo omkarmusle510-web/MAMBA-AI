@@ -447,6 +447,8 @@ function setupIpc() {
   // wake phrase. This is one more activation source alongside hotkey/tray —
   // the lifecycle machine itself is unchanged.
   ipcMain.on("mamba:wake-detected", async () => {
+    // TEMP DIAG (6): the shell received the wake trigger from the orb renderer.
+    console.log("[WakeDiag] mamba:wake-detected received by shell");
     if (!lifecycleManager) return;
     try {
       await lifecycleManager.requestActivation("wake-word");
@@ -469,6 +471,11 @@ function setupIpc() {
   ipcMain.on("mamba:consume-pending-voice-turn", (event) => {
     event.returnValue = pendingVoiceTurn;
     pendingVoiceTurn = false;
+  });
+
+  // TEMP DIAG: forward wake diagnostics from the orb renderer to the terminal.
+  ipcMain.on("mamba:wake-diag", (_event, message) => {
+    console.log("[WakeDiag:orb]", String(message).replace(/^\[WakeDiag\] /, ""));
   });
 
   // Wake-word setting changed in the main-window Settings panel: forward to

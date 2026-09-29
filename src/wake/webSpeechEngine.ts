@@ -23,6 +23,7 @@
  *   builds; this backend is primarily useful for browser-dev validation.
  */
 import type { WakeEngine, WakeEngineOptions, WakeEngineState } from "./types";
+import { wakeDiag } from "./diag";
 
 // Minimal typed shim for the unprefixed SpeechRecognition API.
 interface SpeechRecognitionLike {
@@ -66,6 +67,14 @@ export class WebSpeechWakeEngine implements WakeEngine {
 
   constructor() {
     this.ctor = getSpeechRecognitionCtor();
+    // TEMP DIAG (1): does the constructor exist in the Electron Orb renderer?
+    if (typeof window !== "undefined") {
+      const w = window as any;
+      wakeDiag(
+        `ctor probe: SpeechRecognition=${typeof w.SpeechRecognition}, ` +
+          `webkitSpeechRecognition=${typeof w.webkitSpeechRecognition}`
+      );
+    }
   }
 
   isSupported(): boolean {
@@ -77,7 +86,10 @@ export class WebSpeechWakeEngine implements WakeEngine {
   }
 
   start(opts: WakeEngineOptions): boolean {
+    // TEMP DIAG (4): engine.start() entry + supported/unsupported outcome.
+    wakeDiag(`engine.start() called (phrase="${opts.phrase}", sensitivity=${opts.sensitivity ?? 60})`);
     if (!this.ctor) {
+      wakeDiag(`engine.start() FAILED: unsupported — no SpeechRecognition constructor`);
       this.setState("error");
       return false;
     }
@@ -125,6 +137,8 @@ export class WebSpeechWakeEngine implements WakeEngine {
       rec.onstart = () => {
         this.consecutiveErrors = 0;
         this.active = true;
+        // TEMP DIAG: recognition actually started capturing.
+        wakeDiag(`recognition onstart (mic capture live)`);
         this.setState("listening");
       };
 
@@ -144,6 +158,10 @@ export class WebSpeechWakeEngine implements WakeEngine {
 
       rec.onerror = (e: any) => {
         const err = e?.error || "unknown";
+        // TEMP DIAG: log every error, including benign ones — "no-speech"
+        // means the mic is live but hearing nothing; "network"/"not-allowed"
+        // are the classic Electron failure modes.
+        wakeDiag(`recognition onerror: ${err} (message=${e?.message || "n/a"})`);
         if (err === "no-speech" || err === "aborted") return;
         this.consecutiveErrors++;
         this.setState("error");
@@ -151,6 +169,8 @@ export class WebSpeechWakeEngine implements WakeEngine {
 
       rec.onend = () => {
         this.active = false;
+        // TEMP DIAG: onend fires on every stop/error; intended=false means teardown.
+        wakeDiag(`recognition onend (intended=${this.intended}, consecutiveErrors=${this.consecutiveErrors})`);
         if (!this.intended) return;
         const delay = Math.min(1000 * this.consecutiveErrors * 2, 15000);
         this.restartTimer = setTimeout(() => this.launch(), Math.max(150, delay));
@@ -158,7 +178,9 @@ export class WebSpeechWakeEngine implements WakeEngine {
 
       this.recognition = rec;
       rec.start();
-    } catch {
+    } catch (err) {
+      // TEMP DIAG: rec.start() threw synchronously.
+      wakeDiag(`recognition start() threw: ${(err as Error)?.message || err}`);
       this.setState("error");
       this.restartTimer = setTimeout(() => this.launch(), 1000);
     }
@@ -182,7 +204,12 @@ export class WebSpeechWakeEngine implements WakeEngine {
 
   private fire(): void {
     const now = Date.now();
-    if (now - this.lastTrigger < this.debounceMs) return;
+    // TEMP DIAG (6): phrase matched in a transcript — trigger path reached.
+    wakeDiag(`TRIGGER: phrase matched in transcript`);
+    if (now - this.lastTrigger < this.debounceMs) {
+      wakeDiag(`TRIGGER suppressed by debounce (${now - this.lastTrigger}ms < ${this.debounceMs}ms)`);
+      return;
+    }
     this.lastTrigger = now;
     this.playActivationSound();
     this.setState("triggered");
@@ -224,6 +251,8 @@ export class WebSpeechWakeEngine implements WakeEngine {
   }
 
   private setState(s: WakeEngineState): void {
+    // TEMP DIAG (5): every engine state transition.
+    wakeDiag(`engine state -> ${s}`);
     try {
       this.onState?.(s);
     } catch {

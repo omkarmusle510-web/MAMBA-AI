@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { MambaPresence, MambaPresenceState } from "./MambaPresence";
 import { WakeController } from "./wake/controller";
+import { wakeDiag } from "./wake/diag";
 import { loadSettings } from "./settingsStore";
 
 /**
@@ -52,14 +53,19 @@ export const FloatingOrb: React.FC = () => {
     // Host the wake listener (desktop shell only). Structured as a service;
     // the Orb only displays its state via the mic indicator.
     const canHostWake = Boolean(window.mambaDesktop?.notifyWakeDetected);
+    // TEMP DIAG: is the bridge present and is wake enabled at orb boot?
+    wakeDiag(`orb boot: canHostWake=${canHostWake}`);
     if (canHostWake) {
       const settings = loadSettings();
       wakeEnabledRef.current = settings.wakeWordEnabled !== false;
+      wakeDiag(`orb boot: wakeWordEnabled=${wakeEnabledRef.current} (phrase="${settings.wakePhrase || "hey mamba"}")`);
       const controller = new WakeController({
         phrase: settings.wakePhrase || "hey mamba",
         sensitivity: settings.sensitivity ?? 60,
         onWake: () => {
           setWakeArmed(false);
+          // TEMP DIAG: trigger reached the orb host; notifying the shell.
+          wakeDiag(`orb onWake: calling notifyWakeDetected()`);
           try {
             window.mambaDesktop?.notifyWakeDetected?.();
           } catch {
@@ -72,11 +78,15 @@ export const FloatingOrb: React.FC = () => {
       });
       wakeRef.current = controller;
       if (wakeEnabledRef.current) {
+        wakeDiag(`orb boot: invoking controller.start()`);
         controller.start();
+      } else {
+        wakeDiag(`orb boot: wake disabled in settings — controller NOT started`);
       }
 
       // Runtime toggle from the main-window Settings panel.
       const cleanupWakeSetting = window.mambaDesktop?.onWakeSetting?.((enabled) => {
+        wakeDiag(`orb: wake setting changed -> ${enabled}`);
         wakeEnabledRef.current = enabled;
         if (enabled) {
           controller.rearm();

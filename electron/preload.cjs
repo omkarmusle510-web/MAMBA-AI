@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("mambaDesktop", {
   // the orb renderer; it notifies the shell, which activates the session and
   // asks the main-window renderer to run a single voice turn.
   notifyWakeDetected: () => ipcRenderer.send("mamba:wake-detected"),
+  // TEMP DIAG: forward wake diagnostics from the orb renderer to the terminal.
+  reportWakeDiag: (message) => ipcRenderer.send("mamba:wake-diag", String(message)),
   onVoiceTurnRequest: (callback) => {
     if (typeof callback !== "function") return () => {};
     const handler = () => callback();

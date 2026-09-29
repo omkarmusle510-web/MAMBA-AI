@@ -13,6 +13,7 @@
  */
 import type { WakeEngine, WakeEngineState } from "./types";
 import { WebSpeechWakeEngine } from "./webSpeechEngine";
+import { wakeDiag } from "./diag";
 
 export interface WakeControllerOptions {
   phrase?: string;
@@ -46,7 +47,11 @@ export class WakeController {
 
   /** Start listening for the wake phrase. Safe to call repeatedly. */
   start(): boolean {
+    // TEMP DIAG (2)+(3): is start() called, and does the engine report supported?
+    wakeDiag(`WakeController.start() called (already running=${this.running})`);
     if (this.running) return true;
+    const supported = this.engine.isSupported();
+    wakeDiag(`engine.isSupported() = ${supported}`);
     const ok = this.engine.start({
       phrase: this.opts.phrase || "hey mamba",
       sensitivity: this.opts.sensitivity ?? 60,
@@ -59,6 +64,8 @@ export class WakeController {
         }
       },
     });
+    // TEMP DIAG (4): engine.start() outcome.
+    wakeDiag(`engine.start() returned ${ok}`);
     // start() may return a promise in future engines; treat truthy as ok.
     if (ok === false) {
       this.running = false;
@@ -70,6 +77,7 @@ export class WakeController {
 
   /** Stop listening and release all capture resources. */
   stop(): void {
+    wakeDiag(`WakeController.stop() called`);
     this.running = false;
     try {
       this.engine.stop();
@@ -80,6 +88,7 @@ export class WakeController {
 
   /** Re-arm after a voice turn completes. */
   rearm(): void {
+    wakeDiag(`WakeController.rearm() called`);
     this.stop();
     this.start();
   }
@@ -93,6 +102,8 @@ export class WakeController {
   }
 
   private handleTrigger(): void {
+    // TEMP DIAG (6): trigger callback reached in the controller.
+    wakeDiag(`TRIGGER callback reached in controller — notifying shell`);
     // Release the detector's capture immediately so the main-window voice
     // turn can acquire the microphone without contention.
     this.stop();

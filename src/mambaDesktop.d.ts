@@ -6,6 +6,8 @@ export interface MambaDesktopAPI {
   getAutoStart?: () => boolean;
   setAutoStart?: (enabled: boolean) => boolean;
   notifyWakeDetected?: () => void;
+  /** TEMP DIAG: forward wake diagnostics to the main-process terminal. */
+  reportWakeDiag?: (message: string) => void;
   onVoiceTurnRequest?: (callback: () => void) => () => void;
   consumePendingVoiceTurn?: () => boolean;
   notifyWakeSettingChanged?: (enabled: boolean) => void;
