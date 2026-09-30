@@ -69,7 +69,7 @@ async function init(opts = {}) {
     const t = typeof opts.threshold === "number" ? opts.threshold : activeThreshold;
     if (t !== null && t !== activeThreshold) {
       try {
-        loadKws(t);
+        loadKws(t, opts.keywordsScore);
       } catch (err) {
         return { ok: false, error: String((err && err.message) || err) };
       }
@@ -101,7 +101,7 @@ async function init(opts = {}) {
     const keywords = fs.readFileSync(path.join(dir, "keywords.txt"), "utf8");
     console.log(`[WakeKWS] keywords: ${JSON.stringify(keywords.trim())}`);
 
-    loadKws(threshold);
+    loadKws(threshold, opts.keywordsScore);
     ready = true;
     // TEMP DIAG (decoder): the exact rates sherpa assumes. Removed after diagnosis.
     console.log(`[WakeKWS diag] rates: acceptWaveform=${SAMPLE_RATE} featConfig.samplingRate=${SAMPLE_RATE}`);
@@ -118,7 +118,7 @@ async function init(opts = {}) {
 }
 
 /** (Re)create the spotter. Model files stay on disk; Module stays loaded. */
-function loadKws(threshold) {
+function loadKws(threshold, keywordsScore) {
   if (stream) {
     try {
       stream.free();
@@ -134,6 +134,7 @@ function loadKws(threshold) {
   const dir = kwsDir();
   const keywords = fs.readFileSync(path.join(dir, "keywords.txt"), "utf8");
   const t1 = Date.now();
+  const score = typeof keywordsScore === "number" ? keywordsScore : 1.5;
   kws = kwsApi.createKws(Module, {
     featConfig: { samplingRate: SAMPLE_RATE, featureDim: 80 },
     modelConfig: {
@@ -151,13 +152,13 @@ function loadKws(threshold) {
     },
     maxActivePaths: 4,
     numTrailingBlanks: 1,
-    keywordsScore: 1.0,
+    keywordsScore: score,
     keywordsThreshold: threshold,
     keywords,
   });
   activeThreshold = threshold;
   stream = kws.createStream();
-  console.log(`[WakeKWS] KWS READY in ${Date.now() - t1}ms (threshold=${threshold})`);
+  console.log(`[WakeKWS] KWS READY in ${Date.now() - t1}ms (threshold=${threshold}, score=${score})`);
 }
 
 /**
@@ -202,18 +203,30 @@ function acceptAudio(input) {
       diagT0 = Date.now();
       diagLastBeat = diagT0; // first heartbeat 5s after feeding starts
     }
+    let detectedKw = null;
     let decodesThisCall = 0;
     while (kws.isReady(stream)) {
       kws.decode(stream);
       decodesThisCall++;
+      // Check detection immediately after each decode step so subsequent steps in chunk do not overwrite it
+      const r = kws.getResult(stream);
+      const kw = r && typeof r.keyword === "string" ? r.keyword : "";
+      if (kw.length > 0 && !detectedKw) {
+        detectedKw = kw;
+      }
     }
     diagDecodes += decodesThisCall;
     if (decodesThisCall > 0) diagReadyCalls++;
-    const r = kws.getResult(stream);
-    const kw = r && typeof r.keyword === "string" ? r.keyword : "";
-    // TEMP DIAG (decoder): throttled heartbeat ~5s. impliedHz exposes a
-    // sample-rate mismatch: browser delivering 48 kHz while we label the
-    // stream 16 kHz shows up here as impliedHz ~= 48000.
+
+    // Fallback check after decode loop
+    if (!detectedKw) {
+      const r = kws.getResult(stream);
+      const kw = r && typeof r.keyword === "string" ? r.keyword : "";
+      if (kw.length > 0) {
+        detectedKw = kw;
+      }
+    }
+
     const beatNow = Date.now();
     if (beatNow - diagLastBeat >= 5000) {
       diagLastBeat = beatNow;
@@ -222,15 +235,15 @@ function acceptAudio(input) {
       console.log(
         `[WakeKWS diag] decoder: cumSamples=${diagCumSamples} elapsed=${elapsed.toFixed(1)}s ` +
           `impliedHz=${impliedHz} (expect ~${SAMPLE_RATE}) ` +
-          `decodes=${diagDecodes} readyCalls=${diagReadyCalls} lastKeyword=${JSON.stringify(kw)}`
+          `decodes=${diagDecodes} readyCalls=${diagReadyCalls} lastKeyword=${JSON.stringify(detectedKw || "")}`
       );
     }
-    if (kw.length > 0) {
-      console.log(`[WakeKWS diag] DETECTED keyword "${kw}"`); // TEMP DIAG
+    if (detectedKw && detectedKw.length > 0) {
+      console.log(`[WakeKWS diag] DETECTED keyword "${detectedKw}"`); // TEMP DIAG
       try {
         kws.reset(stream);
       } catch {}
-      return kw;
+      return detectedKw;
     }
   } catch (err) {
     console.error(`[WakeKWS] decode error: ${(err && err.message) || err}`);
