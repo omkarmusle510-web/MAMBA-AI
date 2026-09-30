@@ -172,6 +172,10 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
 
     this.sourceNode = audioCtx.createMediaStreamSource(this.micStream);
     this.processorNode = audioCtx.createScriptProcessor(PUMP_CHUNK, 1, 1);
+    // TEMP DIAG (audio path): counters for the pump callback below.
+    let diagChunks = 0;
+    let diagSends = 0;
+    let diagLastLog = 0;
     this.sourceNode.connect(this.processorNode);
     // ScriptProcessor needs a destination connection to run; keep it muted.
     const mute = audioCtx.createGain();
@@ -182,13 +186,39 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.processorNode.onaudioprocess = (e) => {
       if (!this.intended) return;
       const data = e.inputBuffer.getChannelData(0);
+      // TEMP DIAG (audio path): chunk count / RMS / peak, throttled ~1/s.
+      // Confirms the callback fires, samples are non-zero, and sends happen.
+      diagChunks++;
+      const now = Date.now();
+      if (now - diagLastLog >= 1000) {
+        diagLastLog = now;
+        let peak = 0;
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = data[i];
+          sum += v * v;
+          const a = v < 0 ? -v : v;
+          if (a > peak) peak = a;
+        }
+        const rms = Math.sqrt(sum / data.length);
+        wakeDiag(
+          `sherpa diag: pump alive chunks=${diagChunks} sends=${diagSends} ` +
+            `samples=${data.length} inCh=${e.inputBuffer.numberOfChannels} ` +
+            `rms=${rms.toFixed(4)} peak=${peak.toFixed(4)}`
+        );
+      }
       // Stream PCM to the main-process spotter (fire-and-forget IPC).
       try {
         window.mambaDesktop?.wakeKwsAudioChunk?.(new Float32Array(data));
+        diagSends++;
       } catch (err: any) {
         wakeDiag(`sherpa engine: audio chunk send failed: ${err?.message || err}`);
       }
     };
+    // TEMP DIAG (audio path): AudioContext sample rate / channel config.
+    wakeDiag(
+      `sherpa diag: AudioContext sampleRate=${audioCtx.sampleRate} (expected ${SAMPLE_RATE}), pump chunk=${PUMP_CHUNK}`
+    );
     wakeDiag(`sherpa engine: microphone acquired, streaming to main process`);
   }
 

@@ -30,6 +30,11 @@ let ready = false;
 let initPromise = null;
 let activeThreshold = null;
 
+// TEMP DIAG (audio path): verify PCM chunks arrive intact over IPC.
+// Throttled to ~1/s. Removed after diagnosis.
+let diagChunks = 0;
+let diagLastLog = 0;
+
 function kwsDir() {
   // <project>/dist/wake/kws — written by `npm run build` from public/wake/kws.
   return path.join(path.resolve(__dirname, ".."), "dist", "wake", "kws");
@@ -162,12 +167,32 @@ function acceptAudio(input) {
     }
   }
   if (!samples || samples.length === 0) return null;
+  // TEMP DIAG (audio path): chunk arrival, sample count, RMS, peak.
+  diagChunks++;
+  const diagNow = Date.now();
+  if (diagNow - diagLastLog >= 1000) {
+    diagLastLog = diagNow;
+    let peak = 0;
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i];
+      sum += v * v;
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+    }
+    const rms = Math.sqrt(sum / samples.length);
+    console.log(
+      `[WakeKWS diag] audio in: chunks=${diagChunks} samples=${samples.length} ` +
+        `rms=${rms.toFixed(4)} peak=${peak.toFixed(4)}`
+    );
+  }
   try {
     stream.acceptWaveform(SAMPLE_RATE, samples);
     while (kws.isReady(stream)) kws.decode(stream);
     const r = kws.getResult(stream);
     if (r && typeof r.keyword === "string" && r.keyword.length > 0) {
       const kw = r.keyword;
+      console.log(`[WakeKWS diag] DETECTED keyword "${kw}"`); // TEMP DIAG
       try {
         kws.reset(stream);
       } catch {}
