@@ -35,6 +35,13 @@ let activeThreshold = null;
 let diagChunks = 0;
 let diagLastLog = 0;
 
+// TEMP DIAG (decoder): decode-loop instrumentation. Removed after diagnosis.
+let diagDecodes = 0; // total kws.decode() calls
+let diagReadyCalls = 0; // acceptAudio calls where isReady() fired >= once
+let diagCumSamples = 0; // cumulative samples passed to acceptWaveform
+let diagT0 = 0; // wall-clock ms when feeding started
+let diagLastBeat = 0;
+
 function kwsDir() {
   // <project>/dist/wake/kws — written by `npm run build` from public/wake/kws.
   return path.join(path.resolve(__dirname, ".."), "dist", "wake", "kws");
@@ -96,6 +103,8 @@ async function init(opts = {}) {
 
     loadKws(threshold);
     ready = true;
+    // TEMP DIAG (decoder): the exact rates sherpa assumes. Removed after diagnosis.
+    console.log(`[WakeKWS diag] rates: acceptWaveform=${SAMPLE_RATE} featConfig.samplingRate=${SAMPLE_RATE}`);
     return { ok: true };
   })();
   try {
@@ -188,10 +197,35 @@ function acceptAudio(input) {
   }
   try {
     stream.acceptWaveform(SAMPLE_RATE, samples);
-    while (kws.isReady(stream)) kws.decode(stream);
+    diagCumSamples += samples.length;
+    if (!diagT0) {
+      diagT0 = Date.now();
+      diagLastBeat = diagT0; // first heartbeat 5s after feeding starts
+    }
+    let decodesThisCall = 0;
+    while (kws.isReady(stream)) {
+      kws.decode(stream);
+      decodesThisCall++;
+    }
+    diagDecodes += decodesThisCall;
+    if (decodesThisCall > 0) diagReadyCalls++;
     const r = kws.getResult(stream);
-    if (r && typeof r.keyword === "string" && r.keyword.length > 0) {
-      const kw = r.keyword;
+    const kw = r && typeof r.keyword === "string" ? r.keyword : "";
+    // TEMP DIAG (decoder): throttled heartbeat ~5s. impliedHz exposes a
+    // sample-rate mismatch: browser delivering 48 kHz while we label the
+    // stream 16 kHz shows up here as impliedHz ~= 48000.
+    const beatNow = Date.now();
+    if (beatNow - diagLastBeat >= 5000) {
+      diagLastBeat = beatNow;
+      const elapsed = (beatNow - diagT0) / 1000;
+      const impliedHz = elapsed > 0 ? Math.round(diagCumSamples / elapsed) : 0;
+      console.log(
+        `[WakeKWS diag] decoder: cumSamples=${diagCumSamples} elapsed=${elapsed.toFixed(1)}s ` +
+          `impliedHz=${impliedHz} (expect ~${SAMPLE_RATE}) ` +
+          `decodes=${diagDecodes} readyCalls=${diagReadyCalls} lastKeyword=${JSON.stringify(kw)}`
+      );
+    }
+    if (kw.length > 0) {
       console.log(`[WakeKWS diag] DETECTED keyword "${kw}"`); // TEMP DIAG
       try {
         kws.reset(stream);
