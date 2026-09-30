@@ -139,9 +139,9 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.sensitivity = Math.max(0, Math.min(100, value));
   }
 
-  /** sensitivity 0..100 -> KWS threshold 0.45 (strict) .. 0.10 (loose). */
+  /** sensitivity 0..100 -> KWS threshold 0.35 (strict) .. 0.10 (loose). */
   private threshold(): number {
-    return 0.45 - (this.sensitivity / 100) * 0.35;
+    return 0.35 - (this.sensitivity / 100) * 0.25;
   }
 
   private async startMic(): Promise<void> {
