@@ -191,6 +191,19 @@ _DESKTOP_INTENTS = frozenset(
         "launch_url",
         "browse",
         "open_browser",
+        # Cross-app (Notepad) intents
+        "launch_notepad",
+        "open_notepad",
+        "start_notepad",
+        "type_text",
+        "type_text_in_notepad",
+        "type_in_notepad",
+        "type_into_notepad",
+        "write_in_notepad",
+        "enter_text",
+        "read_notepad_text",
+        "notepad_text",
+        "get_notepad_text",
     }
 )
 

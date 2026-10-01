@@ -40,6 +40,7 @@ security or permission fields (risk_level, destructive, approved) in metadata.
   * terminal ("run_command", "execute_command"): {"executable": "python", "args": ["-V"]} or {"command": "python -V"}
   * filesystem: "list_directory" ({"path": "."}), "read_file" ({"path": "..."}), "write_file" ({"path": "...", "content": "..."}), "delete_file" ({"path": "..."})
   * desktop: "open_url" ({"url": "https://..."})
+  * Notepad cross-app interaction (Windows Notepad only): "launch_notepad" ({}) to open Notepad, "type_text" ({"text": "<exact text to type>", "app": "Notepad"}) to type into Notepad, "read_notepad_text" ({}) to read Notepad's current text. For "open Notepad and type X", plan TWO ordered steps: "launch_notepad" ({}) then "type_text" ({"text": "X", "app": "Notepad"}). Never plan "type_text" for any application other than Notepad — no other application can be typed into.
   * reasoning / response: "analyze" ({}), "respond" ({}), "summarize" ({}), "explain" ({}), "clarify" ({"question": "<clarification question>"})
   * memory: "remember" ({"content": "<text to remember>"}), "recall" ({"query": "<search query>"}), "delete_memory" ({"id": "<id>"})
   * windows: "get_foreground_window" ({}), "get_window_title" ({"hwnd": <int>}), "find_window" ({"query": "<title>"}), "focus_window" ({"query": "..."} or {"hwnd": <int>}), "close_window" ({"query": "..."} or {"hwnd": <int>})

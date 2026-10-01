@@ -162,6 +162,33 @@ Mamba separates **reusable capabilities** from **external actions** across two l
 
 Flow per step: `PlanStep.intent` → mixed executor → skill handler → tool → handler → `Observation`. Skills never bypass tools for external effects; tools never plan.
 
+### 6.1 Cross-Application Interaction (Windows Notepad)
+
+The first real cross-application capability lives in the existing desktop capability — it is **not** a separate intelligence system. There is no `DesktopBrain`, `DesktopAgent`, or `CrossAppOrchestrator`; the same Brain lifecycle drives it.
+
+`tools/desktop/notepad.py` (+ `notepad_tools.py`) implements a deliberately Notepad-only surface: launch, focus/type, and read-back. `skills/desktop.py` wraps those tools as `LaunchNotepadSkill`, `TypeTextInNotepadSkill`, and `ReadNotepadTextSkill`, and `DesktopTaskHandler` maps the intents (`launch_notepad`, `type_text`, `read_notepad_text`).
+
+Flow for *"Open Notepad and type Hello from Mamba"*:
+
+```
+intent launch_notepad      → launch the OS Notepad binary, bind the new window as the target
+intent type_text           → Brain pins {app: Notepad, text: ...} ON THE STEP, evaluates
+                             permission (MEDIUM → ALLOW), re-verifies the bound window is
+                             live Notepad AND the active foreground window, then types
+verification (automatic)   → reads the text back out of the bound window's editor control
+                             and passes it to DefaultVerifier as a `contains` predicate
+→ "Verified: 'Hello from Mamba' is present in the Notepad window"
+```
+
+Safety properties enforced by construction:
+
+- **Explicit target binding.** A Notepad target is accepted only if it is a visible top-level window of class `Notepad`, owned by a `Notepad.exe` process, re-verified at use time. A stale handle from an earlier task or a foreign application handle is rejected — never silently replaced by "whatever is focused".
+- **Verify before typing.** The bound window must be the current foreground window immediately before the first keystroke. Otherwise the action stops with a clear failure instead of typing into an unrelated application. Windows' foreground lock is cleared with the standard `AttachThreadInput`/ALT-activation workaround; the force-switching `SwitchToThisWindow` API is deliberately **not** used.
+- **Observation, not assumption.** Typing is never treated as proof. The outcome is observed by reading the window's own text control; if that cannot be read, the result is reported **inconclusive** rather than success.
+- **No destructive or arbitrary operations.** No close, delete, overwrite, or shutdown is implemented, and typing is impossible into any application other than Notepad.
+
+Permission metadata (authoritative, from `DESKTOP_OPERATIONS`): `launch_notepad` and `read_notepad_text` are `LOW`; `type_text_in_notepad` is `MEDIUM` with `externally_visible=True` and `destructive=False` / `irreversible=False`. Under the existing policy MEDIUM maps to ALLOW, so no second confirmation mechanism is introduced.
+
 ---
 
 ## 7. Models & Model Routing
@@ -372,6 +399,7 @@ CORS is permissive (loopback desktop use). Approval pauses surface as `awaiting_
 
 - **Core lifecycle** — intake, referent resolution, context, memory retrieval, capability-grounded planning, permission-gated execution, observation, verification, replanning, memory update (§3).
 - **13 capabilities** in the registry: filesystem, terminal, desktop, system, screen (+OCR), web, github, memory, analyze, project_understanding — plus email/calendar/messaging skill wiring (see partial).
+- **Cross-application interaction (Notepad)** — the desktop capability can launch Windows Notepad, bind its window as an explicit target, focus it, type text into it, and read the text back to verify the outcome (§6.1). Bounded to Notepad by design.
 - **Permissions** — LOW/MEDIUM→ALLOW, HIGH→ASK, CRITICAL→DENY, metadata escalation, phrase-based approval/denial/resume (§8).
 - **Verification** — predicate checks with replan-on-failure (§9).
 - **Memory** — SQLite WAL, local embeddings + keyword fallback, supersession, transient filtering (§10).
@@ -444,7 +472,9 @@ electron/ .................. desktop shell (main, backend/frontend/lifecycle/
 src/ ....................... React UI (MambaApp, FloatingOrb, orb shaders,
                              audio WS session, wake word, settings)
 docs/ ...................... this documentation set
-tests/ ..................... 154 tests across 12 files
+tests/ ..................... 188 tests across 13 files (incl. cross-app Notepad
+                             tests; real-desktop cases opt in via
+                             MAMBA_REAL_DESKTOP_TESTS=1)
 .mamba/ .................... runtime data (memory.db, settings.json,
                              reminders.json) — created at runtime, gitignored
 ```

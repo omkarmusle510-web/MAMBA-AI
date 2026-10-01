@@ -13,7 +13,23 @@ from tools.desktop.clipboard import (
     ReadClipboardTool,
     WriteClipboardTool,
 )
-from tools.desktop.types import DESKTOP_OPERATIONS, DesktopAction
+from tools.desktop.notepad import (
+    NotepadDriver,
+    WindowsNotepadDriver,
+)
+from tools.desktop.notepad_tools import (
+    LaunchNotepadHandler,
+    LaunchNotepadTool,
+    ReadNotepadTextHandler,
+    ReadNotepadTextTool,
+    TypeTextInNotepadHandler,
+    TypeTextInNotepadTool,
+)
+from tools.desktop.types import (
+    DESKTOP_OPERATIONS,
+    DesktopAction,
+    notepad_operation_for,
+)
 from tools.desktop.window import (
     CloseWindowTool,
     FindWindowTool,
@@ -51,6 +67,27 @@ _CLEAR_CLIPBOARD_INTENTS = frozenset(
 _OPEN_URL_INTENTS = frozenset(
     {"open_url", "launch_url", "browse", "open_browser"}
 )
+
+# ── Cross-app (Notepad) intents ──
+_LAUNCH_NOTEPAD_INTENTS = frozenset(
+    {"launch_notepad", "open_notepad", "start_notepad"}
+)
+_TYPE_TEXT_INTENTS = frozenset(
+    {
+        "type_text",
+        "type_text_in_notepad",
+        "type_in_notepad",
+        "type_into_notepad",
+        "write_in_notepad",
+        "enter_text",
+    }
+)
+_READ_NOTEPAD_TEXT_INTENTS = frozenset(
+    {"read_notepad_text", "notepad_text", "get_notepad_text"}
+)
+
+_NOTEPAD_INTENTS = _LAUNCH_NOTEPAD_INTENTS | _TYPE_TEXT_INTENTS | _READ_NOTEPAD_TEXT_INTENTS
+
 
 
 class OpenURLSkill(BaseSkill):
@@ -355,6 +392,114 @@ class ClearClipboardSkill(BaseSkill):
         )
 
 
+# ── Cross-application (Notepad) skills ──────────────────────────────────────
+
+
+class LaunchNotepadSkill(BaseSkill):
+    """Launch Notepad and bind the new window as the target for later steps."""
+
+    def __init__(
+        self,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+        driver: NotepadDriver | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.LAUNCH_NOTEPAD]
+        super().__init__(
+            Skill(
+                name=defn.name,
+                description=defn.description,
+                metadata=defn.to_metadata(),
+            )
+        )
+        self._tool = tool or LaunchNotepadTool(handler=LaunchNotepadHandler(driver=driver))
+        self._executor = executor or StandardToolExecutor()
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        tool_input = ToolInput(
+            arguments=dict(input.task_input.step_metadata),
+            metadata=dict(input.task_input.step_metadata),
+        )
+        tool_output = self._executor.execute(self._tool, tool_input)
+        return SkillOutput(
+            content=str(tool_output.result or tool_output.error or ""),
+            success=tool_output.success,
+            metadata=tool_output.metadata,
+        )
+
+
+class TypeTextInNotepadSkill(BaseSkill):
+    """Type text into an explicitly bound Notepad window."""
+
+    def __init__(
+        self,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+        driver: NotepadDriver | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.TYPE_TEXT_IN_NOTEPAD]
+        super().__init__(
+            Skill(
+                name=defn.name,
+                description=defn.description,
+                metadata=defn.to_metadata(),
+            )
+        )
+        self._tool = tool or TypeTextInNotepadTool(
+            handler=TypeTextInNotepadHandler(driver=driver)
+        )
+        self._executor = executor or StandardToolExecutor()
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        meta = input.task_input.step_metadata
+        tool_input = ToolInput(
+            arguments=dict(meta),
+            metadata=dict(meta),
+        )
+        tool_output = self._executor.execute(self._tool, tool_input)
+        return SkillOutput(
+            content=str(tool_output.result or tool_output.error or ""),
+            success=tool_output.success,
+            metadata=tool_output.metadata,
+        )
+
+
+class ReadNotepadTextSkill(BaseSkill):
+    """Read the current text content of a bound Notepad window."""
+
+    def __init__(
+        self,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+        driver: NotepadDriver | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.READ_NOTEPAD_TEXT]
+        super().__init__(
+            Skill(
+                name=defn.name,
+                description=defn.description,
+                metadata=defn.to_metadata(),
+            )
+        )
+        self._tool = tool or ReadNotepadTextTool(
+            handler=ReadNotepadTextHandler(driver=driver)
+        )
+        self._executor = executor or StandardToolExecutor()
+
+    def execute(self, input: SkillInput) -> SkillOutput:
+        meta = input.task_input.step_metadata
+        tool_input = ToolInput(
+            arguments=dict(meta),
+            metadata=dict(meta),
+        )
+        tool_output = self._executor.execute(self._tool, tool_input)
+        return SkillOutput(
+            content=str(tool_output.result or tool_output.error or ""),
+            success=tool_output.success,
+            metadata=tool_output.metadata,
+        )
+
+
 @dataclass(slots=True)
 class DesktopTaskHandler:
     """Dispatches desktop/window/clipboard task inputs to concrete skills."""
@@ -368,6 +513,10 @@ class DesktopTaskHandler:
     write_clipboard_skill: WriteClipboardSkill | None = None
     clear_clipboard_skill: ClearClipboardSkill | None = None
     open_url_skill: OpenURLSkill | None = None
+    launch_notepad_skill: LaunchNotepadSkill | None = None
+    type_text_in_notepad_skill: TypeTextInNotepadSkill | None = None
+    read_notepad_text_skill: ReadNotepadTextSkill | None = None
+    notepad_driver: NotepadDriver | None = None
 
     def __post_init__(self) -> None:
         if self.get_foreground_window_skill is None:
@@ -389,6 +538,21 @@ class DesktopTaskHandler:
         if self.open_url_skill is None:
             self.open_url_skill = OpenURLSkill()
 
+        notepad_driver = self.notepad_driver
+        notepad_needed = (
+            self.launch_notepad_skill is None
+            or self.type_text_in_notepad_skill is None
+            or self.read_notepad_text_skill is None
+        )
+        if notepad_driver is None and notepad_needed:
+            notepad_driver = WindowsNotepadDriver()
+        if self.launch_notepad_skill is None:
+            self.launch_notepad_skill = LaunchNotepadSkill(driver=notepad_driver)
+        if self.type_text_in_notepad_skill is None:
+            self.type_text_in_notepad_skill = TypeTextInNotepadSkill(driver=notepad_driver)
+        if self.read_notepad_text_skill is None:
+            self.read_notepad_text_skill = ReadNotepadTextSkill(driver=notepad_driver)
+
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
         """Return authoritative capability security metadata for this intent."""
         intent = (
@@ -396,6 +560,10 @@ class DesktopTaskHandler:
             or task_input.intent
             or ""
         ).strip().lower()
+
+        notepad_meta = notepad_operation_for(intent)
+        if notepad_meta is not None:
+            return DESKTOP_OPERATIONS[notepad_meta].to_metadata()
 
         if intent in _OPEN_URL_INTENTS:
             return DESKTOP_OPERATIONS[DesktopAction.OPEN_URL].to_metadata()
@@ -426,6 +594,18 @@ class DesktopTaskHandler:
         ).strip().lower()
 
         skill_input = SkillInput.from_task(task_input, context)
+
+        if intent in _LAUNCH_NOTEPAD_INTENTS:
+            assert self.launch_notepad_skill is not None
+            return self.launch_notepad_skill.run(skill_input).to_task_output()
+
+        if intent in _TYPE_TEXT_INTENTS:
+            assert self.type_text_in_notepad_skill is not None
+            return self.type_text_in_notepad_skill.run(skill_input).to_task_output()
+
+        if intent in _READ_NOTEPAD_TEXT_INTENTS:
+            assert self.read_notepad_text_skill is not None
+            return self.read_notepad_text_skill.run(skill_input).to_task_output()
 
         if intent in _OPEN_URL_INTENTS:
             assert self.open_url_skill is not None

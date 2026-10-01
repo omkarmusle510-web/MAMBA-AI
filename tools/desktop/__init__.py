@@ -14,12 +14,31 @@ from .errors import (
     WindowError,
     WindowNotFoundError,
 )
+from .notepad import (
+    NotepadDriver,
+    NotepadUnavailableError,
+    PyAutoGuiTextEntry,
+    TargetResolutionError,
+    TextEntry,
+    WindowBinding,
+    WindowsNotepadDriver,
+)
+from .notepad_tools import (
+    LaunchNotepadHandler,
+    LaunchNotepadTool,
+    ReadNotepadTextHandler,
+    ReadNotepadTextTool,
+    TypeTextInNotepadHandler,
+    TypeTextInNotepadTool,
+)
 from .tool import create_desktop_tools
 from .types import (
     DESKTOP_OPERATIONS,
     DesktopAction,
     DesktopOperationDefinition,
     WindowInfo,
+    notepad_operation_for,
+    notepad_operation_metadata,
 )
 from .window import (
     CloseWindowHandler,
@@ -52,13 +71,28 @@ __all__ = [
     "GetForegroundWindowTool",
     "GetWindowTitleHandler",
     "GetWindowTitleTool",
+    "LaunchNotepadHandler",
+    "LaunchNotepadTool",
+    "NotepadDriver",
+    "NotepadUnavailableError",
+    "PyAutoGuiTextEntry",
     "ReadClipboardHandler",
     "ReadClipboardTool",
+    "ReadNotepadTextHandler",
+    "ReadNotepadTextTool",
+    "TargetResolutionError",
+    "TextEntry",
+    "TypeTextInNotepadHandler",
+    "TypeTextInNotepadTool",
+    "WindowBinding",
     "WindowError",
     "WindowInfo",
     "WindowNotFoundError",
+    "WindowsNotepadDriver",
     "WriteClipboardHandler",
     "WriteClipboardTool",
     "create_desktop_tools",
+    "notepad_operation_for",
+    "notepad_operation_metadata",
 ]
 

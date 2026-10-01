@@ -21,6 +21,10 @@ class DesktopAction(StrEnum):
     WRITE_CLIPBOARD = "write_clipboard"
     CLEAR_CLIPBOARD = "clear_clipboard"
     OPEN_URL = "open_url"
+    # ── Cross-application interaction (Phase 9): Notepad, explicitly bound ──
+    LAUNCH_NOTEPAD = "launch_notepad"
+    TYPE_TEXT_IN_NOTEPAD = "type_text_in_notepad"
+    READ_NOTEPAD_TEXT = "read_notepad_text"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +53,7 @@ class DesktopOperationDefinition:
     destructive: bool = False
     user_sensitive: bool = False
     irreversible: bool = False
+    externally_visible: bool = False
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -57,6 +62,7 @@ class DesktopOperationDefinition:
             "destructive": self.destructive,
             "user_sensitive": self.user_sensitive,
             "irreversible": self.irreversible,
+            "externally_visible": self.externally_visible,
         }
 
 
@@ -119,5 +125,73 @@ DESKTOP_OPERATIONS: dict[DesktopAction, DesktopOperationDefinition] = {
         destructive=False,
         user_sensitive=False,
     ),
+    DesktopAction.LAUNCH_NOTEPAD: DesktopOperationDefinition(
+        name=DesktopAction.LAUNCH_NOTEPAD.value,
+        description=(
+            "Launch the Windows Notepad application and bind the newly created "
+            "Notepad window as the target for later steps."
+        ),
+        risk_level=RiskLevel.LOW,
+        destructive=False,
+        user_sensitive=False,
+    ),
+    DesktopAction.TYPE_TEXT_IN_NOTEPAD: DesktopOperationDefinition(
+        name=DesktopAction.TYPE_TEXT_IN_NOTEPAD.value,
+        description=(
+            "Type text into an explicitly bound Notepad window that is verified to be "
+            "the active foreground target. Refuses to type anywhere else."
+        ),
+        # MEDIUM: a real, externally visible mutation of another application's document
+        # state, but not destructive and not irreversible (Notepad text is editable and
+        # the user can undo it). The existing policy maps MEDIUM -> ALLOW, so this keeps
+        # the confirmation mechanism single-sourced: only HIGH-risk actions ASK.
+        risk_level=RiskLevel.MEDIUM,
+        destructive=False,
+        irreversible=False,
+        user_sensitive=False,
+        externally_visible=True,
+    ),
+    DesktopAction.READ_NOTEPAD_TEXT: DesktopOperationDefinition(
+        name=DesktopAction.READ_NOTEPAD_TEXT.value,
+        description=(
+            "Read the current text content of an explicitly bound Notepad window "
+            "(used to observe and verify Notepad interactions)."
+        ),
+        risk_level=RiskLevel.LOW,
+        destructive=False,
+        user_sensitive=False,
+        irreversible=False,
+    ),
 }
+
+
+# ── Notepad (cross-application) action metadata ────────────────────────────
+
+_NOTEPAD_ACTIONS: dict[str, DesktopAction] = {
+    "launch_notepad": DesktopAction.LAUNCH_NOTEPAD,
+    "open_notepad": DesktopAction.LAUNCH_NOTEPAD,
+    "start_notepad": DesktopAction.LAUNCH_NOTEPAD,
+    "type_text": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "type_text_in_notepad": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "type_in_notepad": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "write_in_notepad": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "enter_text": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "type_into_notepad": DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+    "read_notepad_text": DesktopAction.READ_NOTEPAD_TEXT,
+    "notepad_text": DesktopAction.READ_NOTEPAD_TEXT,
+    "get_notepad_text": DesktopAction.READ_NOTEPAD_TEXT,
+}
+
+
+def notepad_operation_for(intent: str) -> DesktopAction | None:
+    """Return the Notepad desktop action bound to a planner intent, if any."""
+    return _NOTEPAD_ACTIONS.get(str(intent or "").strip().lower())
+
+
+def notepad_operation_metadata(intent: str) -> dict[str, Any] | None:
+    """Return authoritative capability metadata for a Notepad intent, if any."""
+    action = notepad_operation_for(intent)
+    if action is None:
+        return None
+    return DESKTOP_OPERATIONS[action].to_metadata()
 

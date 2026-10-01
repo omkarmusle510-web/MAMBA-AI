@@ -12,6 +12,23 @@ from .clipboard import (
     WriteClipboardHandler,
     WriteClipboardTool,
 )
+from .notepad import (
+    NotepadDriver,
+    NotepadUnavailableError,
+    PyAutoGuiTextEntry,
+    TargetResolutionError,
+    TextEntry,
+    WindowBinding,
+    WindowsNotepadDriver,
+)
+from .notepad_tools import (
+    LaunchNotepadHandler,
+    LaunchNotepadTool,
+    ReadNotepadTextHandler,
+    ReadNotepadTextTool,
+    TypeTextInNotepadHandler,
+    TypeTextInNotepadTool,
+)
 from .types import DesktopAction
 from .window import (
     CloseWindowHandler,
@@ -38,5 +55,26 @@ def create_desktop_tools() -> dict[str, BaseTool]:
         DesktopAction.READ_CLIPBOARD.value: ReadClipboardTool(),
         DesktopAction.WRITE_CLIPBOARD.value: WriteClipboardTool(),
         DesktopAction.CLEAR_CLIPBOARD.value: ClearClipboardTool(),
+        DesktopAction.LAUNCH_NOTEPAD.value: LaunchNotepadTool(),
+        DesktopAction.TYPE_TEXT_IN_NOTEPAD.value: TypeTextInNotepadTool(),
+        DesktopAction.READ_NOTEPAD_TEXT.value: ReadNotepadTextTool(),
     }
+
+
+__all__ = [
+    "LaunchNotepadHandler",
+    "LaunchNotepadTool",
+    "NotepadDriver",
+    "NotepadUnavailableError",
+    "PyAutoGuiTextEntry",
+    "ReadNotepadTextHandler",
+    "ReadNotepadTextTool",
+    "TargetResolutionError",
+    "TextEntry",
+    "TypeTextInNotepadHandler",
+    "TypeTextInNotepadTool",
+    "WindowBinding",
+    "WindowsNotepadDriver",
+    "create_desktop_tools",
+]
 
