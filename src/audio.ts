@@ -1,16 +1,21 @@
 /**
  * Audio session for the Mamba desktop voice transport (/live WebSocket).
  *
- * Phase A (one-turn voice):
- * - connect(): WebSocket + TTS playback output only. The microphone is NOT
- *   held open; it is acquired per voice turn and released afterwards.
- * - startVoiceTurn(): acquire mic -> listening cue -> VAD-segmented capture
- *   -> ONE WAV-framed utterance sent as {type:"audio", format:"wav"}.
- * - The server transcribes (Groq STT) -> MambaRuntime -> speaks the reply
- *   back as a complete audio blob (no fake streaming).
- * - Playback end + turnComplete -> onVoiceTurnComplete -> the turn ends and
- *   the mic is released. No continuous conversation (Phase B), no barge-in
- *   (Phase C).
+ * Two session modes share one transport:
+ *
+ * One-turn (startVoiceTurn): acquire mic -> listening cue -> VAD-segmented
+ * capture -> ONE WAV-framed utterance sent as {type:"audio", format:"wav"}.
+ * The server transcribes (STT) -> MambaRuntime -> speaks the reply back as a
+ * complete audio blob. Playback end + turnComplete -> the turn ends and the
+ * mic is released.
+ *
+ * Continuous (startContinuousSession, Phase 8): the mic is acquired ONCE and
+ * held for the session. A session loop VAD-segments utterances and sends
+ * each through the same transport; after each turn's TTS playback drains,
+ * the session returns to LISTENING without user action. While TTS is
+ * playing, a barge-in watcher listens for sustained user speech: on
+ * detection it stops playback immediately and captures the new utterance.
+ * stopContinuousSession() (or the mic toggle) releases everything.
  *
  * Text turns (typed chat) use the same socket via sendText() and are
  * unaffected by voice-turn state.
@@ -37,6 +42,20 @@ const VAD_END_THRESHOLD = 0.012;
 const VAD_SILENCE_END_MS = 1200;
 const VAD_MAX_TURN_MS = 20000;
 const VAD_MIN_AUDIO_MS = 400;
+
+// --- Continuous session + barge-in tuning (Phase 8) ---
+// Barge-in listens for sustained speech while TTS is playing. The threshold
+// sits above the capture VAD so speaker echo (after echo cancellation) does
+// not false-trigger; the streak requires ~400ms of sustained energy and the
+// grace period skips the TTS onset transient.
+const BARGE_IN_RMS_THRESHOLD = 0.05;
+const BARGE_IN_POLL_MS = 100;
+const BARGE_IN_STREAK = 4;
+const BARGE_IN_COOLDOWN_MS = 2500;
+const BARGE_IN_PLAYBACK_GRACE_MS = 800;
+// Quiet capture cycles before an idle continuous session ends itself
+// (~20s per cycle -> ~5 minutes of silence).
+const CONTINUOUS_IDLE_TURNS = 15;
 
 // Convert Base64 string to Uint8Array
 function base64ToUint8Array(base64: string): Uint8Array {
@@ -68,10 +87,27 @@ export class MambaAudioSession {
 
   // Playback
   private activeSources: AudioBufferSourceNode[] = [];
+  // TTS audio messages received but not yet playing (decode in flight).
+  // Prevents turnComplete from ending the turn while decodeAudioData runs.
+  private pendingAudioMessages = 0;
+  private playbackStartedAt = 0;
 
   // Voice-turn lifecycle
   private voiceTurnActive = false;
   private turnCompleteReceived = false;
+
+  // Continuous session (Phase 8): mic held open across turns; barge-in
+  // allowed while TTS is playing. One-turn mode leaves these untouched.
+  private continuousActive = false;
+  private serverTurnActive = false;
+  private bargedIn = false;
+  private staleCompletionPending = false;
+  private sessionEndNotified = false;
+  private idleTurns = 0;
+  private turnEndWaiters: Array<(bargedIn: boolean) => void> = [];
+  private bargeInTimer: number | null = null;
+  private bargeInStreak = 0;
+  private bargeInCooldownUntil = 0;
 
   // State Callbacks
   private onStateChange: (state: LiveState) => void;
@@ -257,6 +293,7 @@ export class MambaAudioSession {
           // Handle TTS audio payload: a COMPLETE audio blob (the provider
           // returns whole audio, not a stream). Decoded format-agnostically.
           if (data.type === "audio" && data.audio) {
+            this.pendingAudioMessages++;
             await this.playAudioMessage(data.audio);
             return;
           }
@@ -356,32 +393,7 @@ export class MambaAudioSession {
     this.setState("listening");
 
     try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) {
-        throw new Error("Web Audio API unavailable.");
-      }
-      this.inputAudioCtx = new AudioContextClass({ sampleRate: 16000 });
-      if (this.inputAudioCtx.state === "suspended") {
-        await this.inputAudioCtx.resume().catch(() => {});
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      if (!this.voiceTurnActive || !this.inputAudioCtx) {
-        stream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
-        return;
-      }
-      this.micStream = stream;
-
-      this.inputAnalyser = this.inputAudioCtx.createAnalyser();
-      this.inputAnalyser.fftSize = 256;
-      this.micSourceNode = this.inputAudioCtx.createMediaStreamSource(this.micStream);
-      this.micSourceNode.connect(this.inputAnalyser);
+      if (!(await this.acquireCapture())) return;
 
       // Listening cue so the user knows when to speak (backend is up by now).
       this.playListeningCue();
@@ -398,14 +410,287 @@ export class MambaAudioSession {
         return;
       }
 
-      const base64 = wavToBase64(utterance, 16000);
-      this.ws.send(JSON.stringify({ type: "audio", format: "wav", audio: base64 }));
+      this.sendUtterance(utterance);
       // Server now drives thinking -> (speaking) -> turnComplete.
     } catch (err: any) {
       console.error("Voice turn failed:", err);
       this.onError(err?.message || "Microphone unavailable.");
       this.completeVoiceTurn();
     }
+  }
+
+  /**
+   * Start a continuous voice session (Phase 8): the mic is acquired ONCE
+   * and held open. The session loop VAD-segments utterances and sends each
+   * through the normal transport; after every turn the session returns to
+   * LISTENING automatically. Barge-in is armed while TTS plays. End with
+   * stopContinuousSession() (mic toggle) — a long silence also ends it.
+   */
+  public async startContinuousSession(): Promise<void> {
+    if (this.continuousActive || this.voiceTurnActive) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Transport not connected.");
+    }
+
+    this.continuousActive = true;
+    this.voiceTurnActive = true;
+    this.turnCompleteReceived = false;
+    this.sessionEndNotified = false;
+    this.idleTurns = 0;
+    this.setState("listening");
+
+    try {
+      if (!(await this.acquireCapture())) {
+        this.continuousActive = false;
+        this.voiceTurnActive = false;
+        return;
+      }
+    } catch (err: any) {
+      this.continuousActive = false;
+      this.voiceTurnActive = false;
+      this.setState("error");
+      this.onError(err?.message || "Microphone unavailable.");
+      return;
+    }
+
+    this.playListeningCue();
+    this.startBargeInWatcher();
+    // The loop runs in the background until stopContinuousSession(); any
+    // unexpected failure ends the session safely instead of hanging.
+    this.runSessionLoop().catch((err) => {
+      console.error("Voice session loop failed:", err);
+      this.finishContinuousSession();
+    });
+  }
+
+  /** End a continuous voice session and release all audio resources. */
+  public stopContinuousSession(): void {
+    if (!this.continuousActive) return;
+    this.finishContinuousSession();
+  }
+
+  public isContinuousSessionActive(): boolean {
+    return this.continuousActive;
+  }
+
+  /** The session loop: capture -> send -> await turn end -> listen again. */
+  private async runSessionLoop(): Promise<void> {
+    while (this.continuousActive) {
+      this.setState("listening");
+      let utterance: Float32Array;
+      try {
+        utterance = await this.captureUtterance();
+      } catch {
+        break;
+      }
+      if (!this.continuousActive) break;
+
+      if (utterance.length === 0) {
+        // Quiet cycle; keep listening, but don't hold the mic forever.
+        this.idleTurns++;
+        if (this.idleTurns >= CONTINUOUS_IDLE_TURNS) {
+          console.log("[Audio] Voice session idle timeout; ending session.");
+          break;
+        }
+        continue;
+      }
+      this.idleTurns = 0;
+
+      // Begin the server turn for this utterance.
+      this.serverTurnActive = true;
+      this.turnCompleteReceived = false;
+      this.setState("thinking");
+      try {
+        this.sendUtterance(utterance);
+      } catch (err: any) {
+        console.error("Failed to send utterance:", err);
+        this.onError("Failed to send audio.");
+        this.serverTurnActive = false;
+        continue;
+      }
+
+      // Resolves when the turn completes (turnComplete + playback drained)
+      // or when barge-in fires. The mic stays open either way.
+      await this.waitForTurnEnd();
+      this.serverTurnActive = false;
+      if (!this.continuousActive) break;
+      // Loop continues -> LISTENING (set at the top).
+    }
+    this.finishContinuousSession();
+  }
+
+  /** Resolve when the current server turn ends; true if it was barged-in. */
+  private waitForTurnEnd(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.turnEndWaiters.push(resolve);
+    });
+  }
+
+  private resolveTurnEnd(bargedIn: boolean): void {
+    const waiters = this.turnEndWaiters;
+    this.turnEndWaiters = [];
+    for (const w of waiters) {
+      try {
+        w(bargedIn);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Idempotent teardown for a continuous session. */
+  private finishContinuousSession(): void {
+    const wasActive = this.continuousActive || this.voiceTurnActive;
+    this.continuousActive = false;
+    this.voiceTurnActive = false;
+    this.serverTurnActive = false;
+    this.bargedIn = false;
+    this.turnCompleteReceived = false;
+    this.staleCompletionPending = false;
+    this.stopBargeInWatcher();
+    // Unblock the session loop wherever it is; capture aborts via the
+    // voiceTurnActive flag in the processor callback.
+    this.resolveTurnEnd(false);
+    this.stopPlayback();
+    this.releaseCapture();
+    this.setState("idle");
+    if (wasActive && !this.sessionEndNotified) {
+      this.sessionEndNotified = true;
+      try {
+        this.onVoiceTurnComplete?.();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Acquire the mic + input graph. Returns false if aborted mid-acquire. */
+  private async acquireCapture(): Promise<boolean> {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) {
+      throw new Error("Web Audio API unavailable.");
+    }
+    const ctx = new AudioContextClass({ sampleRate: 16000 });
+    this.inputAudioCtx = ctx;
+    if (ctx.state === "suspended") {
+      await ctx.resume().catch(() => {});
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    if (!this.voiceTurnActive || this.inputAudioCtx !== ctx) {
+      stream.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {}
+      });
+      return false;
+    }
+    this.micStream = stream;
+
+    this.inputAnalyser = ctx.createAnalyser();
+    this.inputAnalyser.fftSize = 256;
+    this.micSourceNode = ctx.createMediaStreamSource(this.micStream);
+    this.micSourceNode.connect(this.inputAnalyser);
+    return true;
+  }
+
+  /** Send one VAD-segmented utterance as a WAV-framed audio message. */
+  private sendUtterance(utterance: Float32Array): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Transport not connected.");
+    }
+    const base64 = wavToBase64(utterance, 16000);
+    this.ws.send(JSON.stringify({ type: "audio", format: "wav", audio: base64 }));
+  }
+
+  /** Stop all TTS playback immediately (barge-in / session end). */
+  private stopPlayback(): void {
+    for (const source of this.activeSources) {
+      try {
+        source.stop();
+      } catch {
+        // Already finished or stopped
+      }
+    }
+    this.activeSources = [];
+    // NOTE: each stopped source's onended still fires -> maybeCompleteVoiceTurn.
+    // After barge-in the turn is already resolved, so those are no-ops.
+  }
+
+  // --- Barge-in (Phase 8): sustained user speech while TTS is playing ---
+
+  private startBargeInWatcher(): void {
+    this.stopBargeInWatcher();
+    this.bargeInStreak = 0;
+    this.bargeInCooldownUntil = 0;
+    this.bargeInTimer = window.setInterval(() => this.bargeInTick(), BARGE_IN_POLL_MS);
+  }
+
+  private stopBargeInWatcher(): void {
+    if (this.bargeInTimer !== null) {
+      clearInterval(this.bargeInTimer);
+      this.bargeInTimer = null;
+    }
+    this.bargeInStreak = 0;
+  }
+
+  private bargeInTick(): void {
+    if (!this.continuousActive || !this.serverTurnActive) {
+      this.bargeInStreak = 0;
+      return;
+    }
+    // Only while TTS is actually playing.
+    if (this.activeSources.length === 0) {
+      this.bargeInStreak = 0;
+      return;
+    }
+    const now = Date.now();
+    if (now < this.bargeInCooldownUntil) return;
+    if (now - this.playbackStartedAt < BARGE_IN_PLAYBACK_GRACE_MS) return;
+    const rms = this.readMicRms();
+    if (rms >= BARGE_IN_RMS_THRESHOLD) {
+      this.bargeInStreak++;
+      if (this.bargeInStreak >= BARGE_IN_STREAK) {
+        this.bargeInStreak = 0;
+        this.bargeInCooldownUntil = now + BARGE_IN_COOLDOWN_MS;
+        this.triggerBargeIn();
+      }
+    } else {
+      this.bargeInStreak = 0;
+    }
+  }
+
+  private readMicRms(): number {
+    try {
+      if (!this.inputAnalyser) return 0;
+      const buf = new Float32Array(this.inputAnalyser.fftSize);
+      this.inputAnalyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    } catch {
+      return 0;
+    }
+  }
+
+  private triggerBargeIn(): void {
+    if (!this.continuousActive || !this.serverTurnActive) return;
+    console.log("[Audio] Barge-in detected: stopping TTS playback.");
+    // If the server's turnComplete hasn't arrived yet, its eventual arrival
+    // is stale — swallow it so it cannot end the replacement turn.
+    this.staleCompletionPending = !this.turnCompleteReceived;
+    this.bargedIn = true;
+    this.stopPlayback();
+    this.setState("listening");
+    // End the current server turn as barged-in; the session loop captures
+    // the interrupting speech immediately.
+    this.completeVoiceTurn();
   }
 
   /** Capture one utterance with energy-based end-of-speech detection. */
@@ -422,8 +707,14 @@ export class MambaAudioSession {
         if (finished) return;
         finished = true;
         try {
-          if (this.micProcessorNode) this.micProcessorNode.onaudioprocess = null;
+          if (this.micProcessorNode) {
+            this.micProcessorNode.onaudioprocess = null;
+            // Disconnect the per-utterance processor so continuous sessions
+            // don't accumulate dead nodes across turns.
+            this.micProcessorNode.disconnect();
+          }
         } catch {}
+        this.micProcessorNode = null;
         const total = chunks.reduce((n, c) => n + c.length, 0);
         const out = new Float32Array(total);
         let off = 0;
@@ -546,7 +837,20 @@ export class MambaAudioSession {
    * audio, not a PCM stream.
    */
   private async playAudioMessage(base64Audio: string): Promise<void> {
-    if (!this.outputAudioCtx || !this.outputGainNode) return;
+    const settleAudioMessage = () => {
+      this.pendingAudioMessages = Math.max(0, this.pendingAudioMessages - 1);
+    };
+    if (!this.outputAudioCtx || !this.outputGainNode) {
+      settleAudioMessage();
+      this.maybeCompleteVoiceTurn();
+      return;
+    }
+    // A stale blob (turn ended while it was in flight, e.g. the session
+    // was stopped mid-turn) must not start playing over the next turn.
+    if (!this.voiceTurnActive) {
+      settleAudioMessage();
+      return;
+    }
     try {
       this.setState("speaking");
       const bytes = base64ToUint8Array(base64Audio);
@@ -555,18 +859,27 @@ export class MambaAudioSession {
       copy.set(bytes);
       const audioBuffer: AudioBuffer = await this.outputAudioCtx.decodeAudioData(copy.buffer);
 
+      // The turn may have ended (barge-in / stop) while decoding.
+      if (!this.voiceTurnActive) {
+        settleAudioMessage();
+        return;
+      }
+
       const source = this.outputAudioCtx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(this.outputGainNode);
       source.onended = () => {
         const i = this.activeSources.indexOf(source);
         if (i > -1) this.activeSources.splice(i, 1);
+        settleAudioMessage();
         this.maybeCompleteVoiceTurn();
       };
       this.activeSources.push(source);
       source.start();
+      this.playbackStartedAt = Date.now();
     } catch (playbackError) {
       console.error("TTS playback failed:", playbackError);
+      settleAudioMessage();
       this.maybeCompleteVoiceTurn();
     }
   }
@@ -574,13 +887,42 @@ export class MambaAudioSession {
   /** End the turn once the server finished AND playback drained. */
   private maybeCompleteVoiceTurn(): void {
     if (!this.voiceTurnActive) return;
-    if (this.turnCompleteReceived && this.activeSources.length === 0) {
+    if (
+      this.turnCompleteReceived &&
+      this.activeSources.length === 0 &&
+      this.pendingAudioMessages === 0
+    ) {
+      if (this.staleCompletionPending) {
+        // Completion for a barged-in (abandoned) turn; swallow it so it
+        // cannot end the turn that replaced it.
+        this.staleCompletionPending = false;
+        this.turnCompleteReceived = false;
+        return;
+      }
       this.completeVoiceTurn();
     }
   }
 
   private completeVoiceTurn(): void {
     if (!this.voiceTurnActive) return;
+    if (this.continuousActive) {
+      // End of one utterance's server turn. The session loop keeps the mic
+      // open and returns to LISTENING; per-turn completion must NOT release
+      // capture or notify session end.
+      const wasBargeIn = this.bargedIn;
+      const wasServerTurn = this.serverTurnActive;
+      this.bargedIn = false;
+      this.serverTurnActive = false;
+      this.turnCompleteReceived = false;
+      this.resolveTurnEnd(wasBargeIn);
+      if (!wasServerTurn) {
+        // turnComplete for a typed-chat turn that overlapped voice capture —
+        // the session loop is listening, so restore the state the text
+        // turn's "thinking" status overrode.
+        this.setState("listening");
+      }
+      return;
+    }
     this.voiceTurnActive = false;
     this.turnCompleteReceived = false;
     this.releaseCapture();
@@ -594,30 +936,32 @@ export class MambaAudioSession {
 
   /** Public: abandon the current voice turn (e.g. window closing). */
   public endVoiceTurn(): void {
+    if (this.continuousActive) {
+      this.stopContinuousSession();
+      return;
+    }
     this.completeVoiceTurn();
   }
 
-  // Interruption: stop all active playback immediately (reserved for barge-in).
+  // Interruption: stop all active playback immediately (server-sent).
   private handleInterruption() {
     console.log("[Audio] Interruption signal received; stopping playback.");
-    this.activeSources.forEach((source) => {
-      try {
-        source.stop();
-      } catch {
-        // Already finished or stopped
-      }
-    });
-    this.activeSources = [];
+    this.stopPlayback();
     this.setState("listening");
+    if (this.continuousActive) {
+      // The server abandoned the turn; wake the session loop so it goes
+      // back to listening instead of waiting on a dead turn.
+      this.bargedIn = true;
+      this.completeVoiceTurn();
+    }
   }
 
   // Fully cleanup and release connection sockets
   public disconnect() {
-    const wasVoiceTurn = this.voiceTurnActive;
     this.isActivated = false;
-    this.voiceTurnActive = false;
-    this.turnCompleteReceived = false;
-    this.releaseCapture();
+    // Tear down any voice turn/session first (idempotent; fires
+    // onVoiceTurnComplete once if a turn or session was active).
+    this.finishContinuousSession();
     this.setState("disconnected");
 
     // Close WS socket
@@ -628,13 +972,6 @@ export class MambaAudioSession {
       this.ws = null;
     }
 
-    // Stop any playback
-    this.activeSources.forEach((source) => {
-      try {
-        source.stop();
-      } catch {}
-    });
-
     // Close output context
     if (this.outputAudioCtx) {
       try {
@@ -643,16 +980,9 @@ export class MambaAudioSession {
       this.outputAudioCtx = null;
     }
 
-    this.activeSources = [];
     this.inputAnalyser = null;
     this.outputAnalyser = null;
     this.outputGainNode = null;
-
-    if (wasVoiceTurn) {
-      try {
-        this.onVoiceTurnComplete?.();
-      } catch {}
-    }
   }
 }
 

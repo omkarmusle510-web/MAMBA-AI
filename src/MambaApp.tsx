@@ -53,6 +53,8 @@ export const MambaApp: React.FC = () => {
   const audioSessionRef = useRef<MambaAudioSession | null>(null);
   // Set when the shell requested a voice turn before the transport connected.
   const pendingTurnRef = useRef<boolean>(false);
+  // True while a continuous (Phase 8) voice session holds the mic open.
+  const [continuousVoiceActive, setContinuousVoiceActive] = useState(false);
 
   // Sync liveState to desktop shell (for Floating Orb synchronization)
   useEffect(() => {
@@ -104,17 +106,58 @@ export const MambaApp: React.FC = () => {
     runVoiceTurnRef.current = runVoiceTurn;
   });
 
+  // Phase 8: start a continuous voice session — the mic stays open and the
+  // session returns to LISTENING after every turn until stopped. Used for
+  // wake-word activation and the mic toggle. Push-to-talk (orb click) keeps
+  // the one-turn runVoiceTurn above.
+  const runContinuousSession = () => {
+    const session = audioSessionRef.current;
+    if (!session || session.isContinuousSessionActive() || session.isVoiceTurnActive()) return;
+    try {
+      window.mambaDesktop?.reportVoiceState?.(true);
+    } catch {
+      /* non-desktop context */
+    }
+    setContinuousVoiceActive(true);
+    addToast("Voice session started — speak naturally. Click the mic to stop.", "info");
+    session.startContinuousSession().catch((err) => {
+      setContinuousVoiceActive(false);
+      addToast(err?.message || "Voice session failed.", "error");
+      try {
+        window.mambaDesktop?.reportVoiceState?.(false);
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+  // Keep a stable reference for the mount-once effect below.
+  const runContinuousSessionRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    runContinuousSessionRef.current = runContinuousSession;
+  });
+
+  const toggleVoiceSession = () => {
+    const session = audioSessionRef.current;
+    if (!session) return;
+    if (session.isContinuousSessionActive()) {
+      session.stopContinuousSession();
+      // onVoiceTurnComplete clears continuousVoiceActive + reports to shell.
+    } else {
+      runContinuousSessionRef.current();
+    }
+  };
+
   // Initialize session and voice-turn wiring.
   // Wake-word DETECTION lives in the orb renderer (src/wake/); this window
-  // only runs the resulting one-turn voice session.
+  // runs the resulting voice session (continuous, Phase 8).
   useEffect(() => {
     const session = new MambaAudioSession({
       onStateChange: (state) => {
         setLiveState(state);
-        // A voice turn requested before the transport connected starts now.
+        // A voice session requested before the transport connected starts now.
         if (state === "idle" && pendingTurnRef.current) {
           pendingTurnRef.current = false;
-          runVoiceTurnRef.current();
+          runContinuousSessionRef.current();
         }
       },
       onTranscription: (role, text) => {
@@ -146,8 +189,10 @@ export const MambaApp: React.FC = () => {
         setLiveState("error");
       },
       onVoiceTurnComplete: () => {
-        // The voice turn released the mic; tell the shell so the lifecycle
-        // timers and the orb wake listener can resume their quiet state.
+        // A voice turn (one-turn) or a whole continuous session ended; the
+        // mic is released. Tell the shell so the lifecycle timers and the
+        // orb wake listener can resume their quiet state.
+        setContinuousVoiceActive(false);
         try {
           window.mambaDesktop?.reportVoiceState?.(false);
         } catch {
@@ -160,10 +205,11 @@ export const MambaApp: React.FC = () => {
     session.connect();
 
     // Voice-turn requests from the shell (wake-word trigger in the orb
-    // renderer). The shell also stashes a pending flag in case this
-    // renderer was still loading when the trigger fired.
+    // renderer) start a continuous Phase 8 voice session. The shell also
+    // stashes a pending flag in case this renderer was still loading when
+    // the trigger fired.
     const cleanupVoiceTurn = window.mambaDesktop?.onVoiceTurnRequest?.(() => {
-      runVoiceTurnRef.current();
+      runContinuousSessionRef.current();
     });
     try {
       if (window.mambaDesktop?.consumePendingVoiceTurn?.() === true) {
@@ -329,6 +375,19 @@ export const MambaApp: React.FC = () => {
             title="Toggle Text Input"
           >
             <Volume2 className="w-4 h-4" />
+          </button>
+
+          {/* Voice session toggle (Phase 8 continuous conversation) */}
+          <button
+            onClick={toggleVoiceSession}
+            className={`p-2.5 rounded-xl border transition ${
+              continuousVoiceActive
+                ? "bg-red-500/20 border-red-500/40 text-red-300"
+                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+            }`}
+            title={continuousVoiceActive ? "Stop voice session" : "Start voice session"}
+          >
+            {continuousVoiceActive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           </button>
 
           {/* Settings toggle */}
