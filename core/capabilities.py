@@ -188,8 +188,9 @@ class CapabilityRegistry:
             "MAMBA RUNTIME CAPABILITIES & LIMITATIONS:",
             "You are Mamba, an operating layer between the user and digital tools, NOT a passive text-only chatbot.",
             "You have real, working tools and skills. When asked what you can do:",
-            "- Acknowledge your real capabilities: you CAN open applications and websites, read/write files, run commands, inspect GitHub, search the web, manage calendar/email/messages, inspect screen/OCR, and remember user context.",
-            "- State real limitations accurately: you CAN open URLs in the default browser, but you CANNOT control in-page media playback (e.g. playing/selecting specific YouTube videos) or click arbitrary web page buttons without dedicated extensions.",
+            "- Acknowledge your real capabilities: you CAN open applications and websites, control a real browser (navigate, inspect a page's elements, click, type, scroll), read/write files, run commands, inspect GitHub, search the web, manage calendar/email/messages, inspect screen/OCR, and remember user context.",
+            "- State real limitations accurately: you CAN control a browser page you are driving, but you CANNOT click by coordinates or drive a page whose target element you cannot identify; you CAN open URLs in the default browser, but you CANNOT control in-page media playback (e.g. playing/selecting specific YouTube videos).",
+            "- Browser actions that submit, post, send, purchase, delete, or change account state require the user's approval.",
             "- If a capability is not configured (e.g. email with no provider connected): state clearly: 'I have email capabilities, but no email provider is currently configured.' Do not claim email is impossible.",
             "- If a capability is genuinely unsupported: state clearly: 'I don't currently have a capability for that.' Never claim you are just a text model that cannot interact with external tools.",
             "",
@@ -211,7 +212,7 @@ def default_capability_registry(
     web_configured: bool | None = None,
     github_configured: bool | None = None,
 ) -> CapabilityRegistry:
-    """Create a CapabilityRegistry populated with all 12 standard Mamba capabilities."""
+    """Create a CapabilityRegistry populated with all standard Mamba capabilities."""
     if web_configured is None:
         web_configured = bool(os.environ.get("TAVILY_API_KEY", "").strip())
     if github_configured is None:
@@ -281,6 +282,48 @@ def default_capability_registry(
             ),
             status=CapabilityStatus.AVAILABLE,
             provider="local",
+            provider_configured=True,
+        ),
+        CapabilityDescriptor(
+            capability_id="browser",
+            name="Browser Interaction",
+            description=(
+                "Control a real browser session: navigate pages, inspect their structure "
+                "and elements, click, type, scroll, and observe the result."
+            ),
+            supported_actions=(
+                "open_url_in_browser",
+                "navigate_browser",
+                "browser_back",
+                "browser_forward",
+                "browser_reload",
+                "inspect_page",
+                "read_page",
+                "browser_links",
+                "browser_buttons",
+                "browser_fields",
+                "find_on_page",
+                "browser_wait",
+                "list_browser_targets",
+                "attach_browser",
+                "click_element",
+                "type_text_in_page",
+                "clear_field",
+                "press_key_in_page",
+                "browser_scroll",
+                "select_option",
+            ),
+            limitations=(
+                "Controls one bound browser page at a time through a provider adapter (Playwright MCP driving Chrome by default); it never clicks by coordinates.",
+                "Actions that submit, post, send, purchase, delete, or change account state require user approval.",
+                "Requires an interactive desktop session; the browser window is controlled by Mamba, not the user's normal browsing session unless CDP attach is configured.",
+            ),
+            unavailable_actions=(
+                "Driving a page without identifying the target element",
+                "Bypassing the permission policy for consequential actions",
+            ),
+            status=CapabilityStatus.AVAILABLE,
+            provider="playwright-mcp",
             provider_configured=True,
         ),
         CapabilityDescriptor(

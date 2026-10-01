@@ -133,6 +133,152 @@ _NOTEPAD_FLAVOURED_INTENTS: frozenset[str] = frozenset(
         "get_notepad_text",
     }
 )
+
+# ── Browser interaction ────────────────────────────────────────────────────
+# Intents that drive a real browser page. The action for the step travels in its
+# metadata; these sets only tell Core which steps are browser interactions, so it
+# can ask for the right outcome observation and verify it through the existing
+# verifier. No browser-specific reasoning lives in Core.
+_BROWSER_NAVIGATE_INTENTS: frozenset[str] = frozenset(
+    {
+        "open_url_in_browser",
+        "open_page",
+        "browse_url",
+        "visit_page",
+        "navigate_browser",
+        "browser_navigate",
+        "go_to_url",
+        "browser_back",
+        "go_back",
+        "navigate_back",
+        "browser_forward",
+        "go_forward",
+        "navigate_forward",
+        "browser_reload",
+        "reload_page",
+        "refresh_page",
+    }
+)
+_BROWSER_MUTATING_INTENTS: frozenset[str] = frozenset(
+    {
+        "click_element",
+        "browser_click",
+        "click_on_page",
+        "click_link",
+        "type_text_in_page",
+        "browser_type",
+        "fill_field",
+        "enter_text_in_page",
+        "clear_field",
+        "browser_clear",
+        "clear_input",
+        "press_key_in_page",
+        "browser_press_key",
+        "page_press_key",
+        "browser_scroll",
+        "scroll_page",
+        "select_option",
+        "browser_select",
+        "choose_option",
+    }
+)
+_BROWSER_READ_INTENTS: frozenset[str] = frozenset(
+    {
+        "browser_current",
+        "get_current_page",
+        "current_url",
+        "inspect_page",
+        "browser_inspect",
+        "browser_inspect_page",
+        "page_snapshot",
+        "browser_snapshot",
+        "read_page",
+        "browser_read_page",
+        "page_text",
+        "read_webpage",
+        "browser_links",
+        "page_links",
+        "list_page_links",
+        "browser_buttons",
+        "page_buttons",
+        "browser_fields",
+        "page_fields",
+        "form_fields",
+        "find_on_page",
+        "browser_find",
+        "search_page",
+        "browser_wait",
+        "wait_for_page",
+        "wait_for_text",
+        "list_browser_targets",
+        "browser_targets",
+        "list_browser_tabs",
+        "browser_tabs",
+        "attach_browser",
+        "bind_browser",
+        "select_browser_tab",
+    }
+)
+_BROWSER_INTENTS: frozenset[str] = (
+    _BROWSER_NAVIGATE_INTENTS | _BROWSER_MUTATING_INTENTS | _BROWSER_READ_INTENTS
+)
+
+_BROWSER_EXPECTED_KEYS: tuple[str, ...] = (
+    "expected",
+    "verify",
+    "expect_text",
+    "expect_url",
+    "expect_title",
+)
+
+
+def _browser_expectation(step: PlanStep) -> dict[str, Any] | None:
+    """Build the expected-outcome predicate for a browser step.
+
+    A step states what should be observable after the action (this is what makes
+    "clicked Search" different from "search results appeared"):
+
+    * ``expected`` / ``expect_text`` — text that must appear in the page;
+    * ``expect_url`` — a URL (or fragment) the page must be on;
+    * ``expect_title`` — text the page title must contain.
+
+    Returns ``None`` when the step states nothing to check, in which case the
+    outcome is reported as executed-but-unverified instead of assumed successful.
+    """
+    metadata = step.metadata
+    raw_expected = metadata.get("expected")
+
+    predicate: dict[str, Any] = {}
+    if isinstance(raw_expected, dict):
+        for key in ("url_contains", "url", "expect_url"):
+            if raw_expected.get(key):
+                predicate["url_contains"] = str(raw_expected[key])
+        for key in ("title_contains", "title", "expect_title"):
+            if raw_expected.get(key):
+                predicate["title_contains"] = str(raw_expected[key])
+        for key in ("contains", "text", "expect_text"):
+            if raw_expected.get(key):
+                predicate["contains"] = str(raw_expected[key])
+        if predicate:
+            return predicate
+        return None
+
+    if isinstance(raw_expected, str) and raw_expected.strip():
+        predicate["contains"] = raw_expected.strip()
+    for key, target in (
+        ("expect_text", "contains"),
+        ("expect_url", "url_contains"),
+        ("expect_title", "title_contains"),
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            predicate[target] = value.strip()
+
+    verify = metadata.get("verify")
+    if not predicate and isinstance(verify, str) and verify.strip():
+        predicate["contains"] = verify.strip()
+    return predicate or None
+
 _NEEDS_REPLANNING_KEY = "needs_replanning"
 """ExecutionPlan.metadata key a planner sets to request another reasoning
 cycle after this plan's steps run, because it already expects to need
@@ -149,7 +295,7 @@ def _last_observation_content(context: ExecutionContext) -> str | None:
     # Trailing "outcome verified" notes are confirmations of the step that just
     # ran, not a new result: the step's own observation stays the reported output.
     for observation in reversed(observations):
-        if observation.metadata.get("action") == "verification_passed":
+        if observation.metadata.get("action") in ("verification_passed", "verification_unverified"):
             continue
         return observation.content
     return observations[-1].content
@@ -983,6 +1129,27 @@ class Brain:
                 context.mark_failed(reason)
                 return _StepOutcome.FAILED, reason
 
+        # ── Browser target binding & expected-outcome pinning ──
+        # Browser work needs the same guarantees as desktop work: the page the
+        # step is bound to is pinned on the step, and the outcome the user asked
+        # for is recorded up front so verification checks the page rather than
+        # trusting that a click or keystroke was delivered.
+        browser_error = self._bind_browser_target(step)
+        if browser_error:
+            obs = Observation(
+                step_id=step.id,
+                content=browser_error,
+                success=False,
+                metadata={
+                    "error": "target_binding_failed",
+                    "target_bound": False,
+                    "action": step.intent,
+                },
+            )
+            context.add_observation(obs)
+            context.mark_failed(browser_error)
+            return _StepOutcome.FAILED, browser_error
+
         # ── Cross-app target binding (Notepad) ──
         # The action target is bound and validated *before* permission
         # evaluation and before execution: the typed text, the intended
@@ -1059,18 +1226,37 @@ class Brain:
                 # between "the action executed" and "the requested outcome was
                 # confirmed" is visible in the observations and in the final
                 # response rather than being implied.
-                context.add_observation(
-                    Observation(
-                        step_id=step.id,
-                        content=self._verified_outcome_message(step),
-                        success=True,
-                        metadata={
-                            "action": "verification_passed",
-                            "step_id": step.id,
-                            "verified": True,
-                        },
+                if reason:
+                    # The action ran and was observed, but the step stated nothing
+                    # to check against: report that honestly instead of implying
+                    # the outcome was confirmed.
+                    context.add_observation(
+                        Observation(
+                            step_id=step.id,
+                            content=reason,
+                            success=True,
+                            metadata={
+                                "action": "verification_unverified",
+                                "step_id": step.id,
+                                "verified": False,
+                                "outcome_verified": False,
+                            },
+                        )
                     )
-                )
+                else:
+                    context.add_observation(
+                        Observation(
+                            step_id=step.id,
+                            content=self._verified_outcome_message(step),
+                            success=True,
+                            metadata={
+                                "action": "verification_passed",
+                                "step_id": step.id,
+                                "verified": True,
+                                "outcome_verified": True,
+                            },
+                        )
+                    )
             else:
                 # Verification failure: allow replanning unless explicitly disabled
                 allow_replan = step.metadata.get("replan_on_verification_failure", True)
@@ -1092,6 +1278,164 @@ class Brain:
                 return _StepOutcome.FAILED, reason
 
         return _StepOutcome.FINISHED, ""
+
+    def _bind_browser_target(self, step: PlanStep) -> str:
+        """Pin a browser step's target and expected outcome before it runs.
+
+        Two things are frozen onto the step:
+
+        * the **expected outcome** the user asked for (text to appear, the page
+          to be on a URL, the title to contain something), so verification checks
+          the page instead of the fact that an action was performed. When the
+          step states no expectation, it is marked so the result is reported as
+          executed-but-unverified rather than assumed successful.
+        * the **bound page**, when an earlier step in the same plan already bound
+          one, so a later action cannot drift onto a different tab.
+
+        Changing tabs or opening a new page is never inferred: a step that wants
+        another page must say so.
+
+        Returns an error string when the step cannot be prepared safely.
+        """
+        intent = step.intent.strip().lower()
+        if intent not in _BROWSER_INTENTS:
+            return ""
+
+        action = str(
+            step.metadata.get("action") or step.metadata.get("browser_action") or ""
+        ).strip().lower()
+
+        # URL sanity for navigation steps: refuse to "open" nothing or a scheme we
+        # do not support instead of navigating somewhere unintended.
+        if intent in _BROWSER_NAVIGATE_INTENTS or action in ("open", "navigate"):
+            if intent not in ("browser_back", "go_back", "navigate_back",
+                              "browser_forward", "go_forward", "navigate_forward",
+                              "browser_reload", "reload_page", "refresh_page"):
+                url = str(
+                    step.metadata.get("url")
+                    or step.metadata.get("target_url")
+                    or step.metadata.get("href")
+                    or step.metadata.get("site")
+                    or ""
+                ).strip()
+                if not url:
+                    return (
+                        "Refusing to navigate: no URL was provided for the browser step."
+                    )
+
+        expectation = _browser_expectation(step)
+        if expectation:
+            step.metadata["expected"] = expectation
+            step.metadata["outcome_observable"] = True
+            step.metadata["explicit_expectation"] = True
+        elif intent in _BROWSER_NAVIGATE_INTENTS:
+            # Navigation's natural outcome is "that page is loaded": verifiable
+            # without the user having to restate it.
+            step.metadata["outcome_observable"] = True
+            step.metadata["explicit_expectation"] = False
+        else:
+            # An interaction with no stated outcome is executed but only
+            # reported as not independently verified — never assumed successful.
+            step.metadata["outcome_observable"] = False
+            step.metadata.setdefault("expected", {})
+        return ""
+
+    def _verify_browser_outcome(
+        self,
+        step: PlanStep,
+        observation: Observation,
+    ) -> tuple[bool, str]:
+        """Verify a browser step by comparing the observed page to the expectation.
+
+        The page state the capability observed (URL, title, visible text) is
+        compared with the step's expected predicate through the existing
+        verifier. If the page cannot be observed, the outcome is reported as
+        inconclusive — never as success.
+        """
+        expected = step.metadata.get("expected")
+        if not isinstance(expected, dict) or not expected:
+            explicit = bool(step.metadata.get("explicit_expectation"))
+            if not explicit and step.intent.strip().lower() in _BROWSER_NAVIGATE_INTENTS:
+                # Navigation is verified by having arrived on a real page.
+                url = str(observation.metadata.get("page_url") or "")
+                if url and not url.startswith("about:"):
+                    return True, ""
+                return False, (
+                    "verification failed: the browser did not land on a page "
+                    f"(current URL is '{url or 'unknown'}')"
+                )
+            return True, self._browser_unverified_reason(observation)
+
+        actual_text = observation.metadata.get("actual")
+        if not isinstance(actual_text, str) or not actual_text.strip():
+            return False, (
+                "verification inconclusive: the page state after the browser action "
+                "could not be observed"
+            )
+
+        metadata = {**dict(step.metadata), **dict(observation.metadata)}
+        predicate: dict[str, Any] = {}
+        if expected.get("url_contains"):
+            predicate["url_contains"] = expected["url_contains"]
+        if expected.get("title_contains"):
+            predicate["title_contains"] = expected["title_contains"]
+        if expected.get("contains"):
+            predicate["contains"] = expected["contains"]
+
+        url = str(metadata.get("page_url") or "")
+        title = str(metadata.get("page_title") or "")
+        failures: list[str] = []
+
+        def _check(expect: Any, candidate: str, label: str) -> None:
+            needle = str(expect).strip().casefold()
+            if needle and needle not in candidate.casefold():
+                failures.append(f"{label} {candidate.strip()!r} does not contain {str(expect)!r}")
+
+        if "url_contains" in predicate:
+            _check(predicate["url_contains"], url, "the page URL")
+        if "title_contains" in predicate:
+            _check(predicate["title_contains"], title, "the page title")
+
+        if "contains" in predicate:
+            request = VerificationRequest(
+                expected={"contains": predicate["contains"]},
+                actual=actual_text,
+                metadata={**metadata, "capability": "browser"},
+            )
+            try:
+                result: VerificationResult = self.verifier.verify(request)
+            except Exception as exc:
+                return False, f"verification evaluation error: {exc}"
+            if result.status == VerificationStatus.FAILED:
+                seen = actual_text.strip()
+                if len(seen) > 200:
+                    seen = seen[:200] + "…"
+                return False, (
+                    f"verification failed: the page does not show {str(predicate['contains'])!r} "
+                    f"(observed: {seen!r})"
+                )
+            if result.status == VerificationStatus.INCONCLUSIVE:
+                return False, f"verification inconclusive: {result.reason}"
+
+        if failures:
+            return False, "verification failed: " + "; ".join(failures)
+        return True, ""
+
+    def _browser_unverified_reason(self, observation: Observation) -> str:
+        """Describe what was observed when no expectation was stated to check."""
+        detail = "the requested page content could not be observed"
+        page_url = str(observation.metadata.get("page_url") or "")
+        seen = str(observation.metadata.get("actual") or "")
+        if page_url or seen:
+            shown = seen.strip().replace("\n", " ")
+            if len(shown) > 160:
+                shown = shown[:160] + "…"
+            detail = (
+                "the page state was observed"
+                + (f" (url: {page_url})" if page_url else "")
+                + (f": {shown}" if shown else "")
+            )
+        return f"executed but not independently verified: {detail}"
 
     def _bind_cross_app_target(self, step: PlanStep) -> str:
         """Bind and freeze the application action target on a plan step.
@@ -1479,6 +1823,10 @@ class Brain:
         if intent_lower in _CROSS_APP_TEXT_INTENTS:
             # Typing keystrokes is an action; the *outcome* must be observed.
             return True
+        if intent_lower in _BROWSER_INTENTS:
+            # Browser navigation and interaction are actions; what matters is the
+            # page state that results, which verification checks.
+            return True
         return (
             "expected" in step.metadata
             or step.metadata.get("verify") is True
@@ -1496,6 +1844,12 @@ class Brain:
             "expected",
             observation.metadata.get("expected", UNAVAILABLE),
         )
+
+        # ── Browser outcome verification ──
+        # A browser action is not the outcome: the page it produced is. Observe
+        # the page state and check the step's expectation against it.
+        if step.intent.strip().lower() in _BROWSER_INTENTS:
+            return self._verify_browser_outcome(step, observation)
 
         # ── Cross-app outcome verification ──
         # "Keystrokes were sent" is not evidence that the requested text landed
@@ -1638,6 +1992,19 @@ class Brain:
     def _verified_outcome_message(self, step: PlanStep) -> str:
         """Describe a verified outcome distinctly from a merely executed action."""
         expected = step.metadata.get("expected")
+
+        # Browser outcomes state what was actually confirmed on the page.
+        if step.intent.strip().lower() in _BROWSER_INTENTS and isinstance(expected, dict):
+            details: list[str] = []
+            if expected.get("url_contains"):
+                details.append(f"the page is on a URL containing '{expected['url_contains']}'")
+            if expected.get("title_contains"):
+                details.append(f"the page title contains '{expected['title_contains']}'")
+            if expected.get("contains"):
+                details.append(f"the page shows '{expected['contains']}'")
+            if details:
+                return "Verified: " + "; ".join(details) + "."
+
         if isinstance(expected, dict):
             ui_predicate = expected.get(_UI_TEXT_PREDICATE_KEY)
             if isinstance(ui_predicate, dict):
@@ -1684,6 +2051,15 @@ class Brain:
         "type_text", "type_text_in_notepad", "type_in_notepad",
         "type_into_notepad", "write_in_notepad", "enter_text",
         "type_text_in_application", "write_in_application",
+        # Browser navigation and interaction change a real page.
+        "open_url_in_browser", "open_page", "browse_url", "visit_page",
+        "navigate_browser", "browser_navigate", "go_to_url",
+        "click_element", "browser_click", "click_on_page", "click_link",
+        "type_text_in_page", "browser_type", "fill_field",
+        "enter_text_in_page", "clear_field", "browser_clear", "clear_input",
+        "press_key_in_page", "browser_press_key", "page_press_key",
+        "browser_scroll", "scroll_page", "select_option", "browser_select",
+        "choose_option",
     })
 
     def _update_memory(

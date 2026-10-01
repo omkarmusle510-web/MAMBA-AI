@@ -16,6 +16,7 @@ from tools.protocols import ToolExecutor
 from tools.tool import BaseTool
 
 from .analyze import AnalyzeSkill, AnalyzeTaskHandler
+from .browser import BrowserTaskHandler
 from .calendar import CalendarTaskHandler
 from .desktop import DesktopTaskHandler
 from .email import EmailTaskHandler
@@ -266,6 +267,85 @@ _SCREEN_INTENTS = frozenset(
 
 _WEB_INTENTS = frozenset({"web_search"})
 
+# ── Browser interaction intents ─────────────────────────────────────────────
+_BROWSER_INTENTS = frozenset(
+    {
+        # navigation
+        "open_url_in_browser",
+        "open_page",
+        "browse_url",
+        "visit_page",
+        "navigate_browser",
+        "browser_navigate",
+        "go_to_url",
+        "browser_back",
+        "go_back",
+        "navigate_back",
+        "browser_forward",
+        "go_forward",
+        "navigate_forward",
+        "browser_reload",
+        "reload_page",
+        "refresh_page",
+        # inspection
+        "browser_current",
+        "get_current_page",
+        "current_url",
+        "inspect_page",
+        "browser_inspect",
+        "browser_inspect_page",
+        "page_snapshot",
+        "browser_snapshot",
+        "read_page",
+        "browser_read_page",
+        "page_text",
+        "read_webpage",
+        "browser_links",
+        "page_links",
+        "list_page_links",
+        "browser_buttons",
+        "page_buttons",
+        "browser_fields",
+        "page_fields",
+        "form_fields",
+        "find_on_page",
+        "browser_find",
+        "search_page",
+        "browser_wait",
+        "wait_for_page",
+        "wait_for_text",
+        # targets
+        "list_browser_targets",
+        "browser_targets",
+        "list_browser_tabs",
+        "browser_tabs",
+        "attach_browser",
+        "bind_browser",
+        "select_browser_tab",
+        # interaction
+        "browser_scroll",
+        "scroll_page",
+        "scroll",
+        "click_element",
+        "browser_click",
+        "click_on_page",
+        "click_link",
+        "type_text_in_page",
+        "browser_type",
+        "fill_field",
+        "enter_text_in_page",
+        "clear_field",
+        "browser_clear",
+        "clear_input",
+        "press_key_in_page",
+        "browser_press_key",
+        "page_press_key",
+        "select_option",
+        "browser_select",
+        "choose_option",
+    }
+)
+
 _EMAIL_INTENTS = frozenset(
     {
         "search_emails",
@@ -372,6 +452,7 @@ def create_mixed_task_executor(
     system_handler: TaskHandler | None = None,
     screen_handler: TaskHandler | None = None,
     web_handler: TaskHandler | None = None,
+    browser_handler: TaskHandler | None = None,
     memory_store: MemoryStore | None = None,
     memory_handler: TaskHandler | None = None,
     email_handler: TaskHandler | None = None,
@@ -439,6 +520,9 @@ def create_mixed_task_executor(
     if web_handler is None:
         web_handler = WebTaskHandler()
 
+    if browser_handler is None:
+        browser_handler = BrowserTaskHandler()
+
     if memory_handler is None:
         store = memory_store or InMemoryStore()
         memory_handler = MemoryTaskHandler(memory_skill=MemorySkill(store=store))
@@ -480,6 +564,9 @@ def create_mixed_task_executor(
 
     for intent in _WEB_INTENTS:
         handlers[intent] = web_handler
+
+    for intent in _BROWSER_INTENTS:
+        handlers[intent] = browser_handler
 
     if memory_handler is not None:
         for intent in _MEMORY_INTENTS:
