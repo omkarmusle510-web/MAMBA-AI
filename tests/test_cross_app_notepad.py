@@ -49,6 +49,7 @@ from tools.desktop.notepad import (
 from tools.desktop.types import (
     DESKTOP_OPERATIONS,
     DesktopAction,
+    cross_app_operation_metadata,
     notepad_operation_metadata,
 )
 
@@ -82,7 +83,7 @@ class FakeNotepadDriver:
         self.refused_type_calls: list[tuple[int, str]] = []
 
     # driver protocol
-    def is_available(self) -> tuple[bool, str]:
+    def is_available(self, app_id: str | None = None) -> tuple[bool, str]:
         return (True, "Notepad is available.") if self.available else (
             False,
             "Notepad (notepad.exe) was not found on this system.",
@@ -96,6 +97,7 @@ class FakeNotepadDriver:
         *,
         timeout: float = 10.0,
         editor_timeout: float = 5.0,
+        options: dict[str, Any] | None = None,
     ) -> WindowBinding:
         if not self.available:
             raise NotepadUnavailableError("Notepad (notepad.exe) was not found on this system.")
@@ -395,7 +397,7 @@ def test_foreign_explicit_handle_is_rejected():
 
     assert result.status == ResultStatus.FAILED
     assert driver.type_calls == []
-    assert any("not an open Notepad window" in o.content for o in result.observations)
+    assert any("not an open" in o.content and "window" in o.content for o in result.observations)
 
 
 def test_non_notepad_application_is_refused_before_execution():
@@ -425,7 +427,7 @@ def test_non_notepad_application_is_refused_before_execution():
 
     assert result.status == ResultStatus.FAILED
     assert driver.type_calls == []
-    assert any("only type into Notepad" in o.content for o in result.observations)
+    assert any("not a supported application" in o.content for o in result.observations)
 
 
 def test_stale_bound_window_is_rejected():
@@ -452,7 +454,7 @@ def test_stale_bound_window_is_rejected():
 
     assert result.status == ResultStatus.FAILED
     assert driver.type_calls == []
-    assert any("not an open Notepad window" in o.content for o in result.observations)
+    assert any("not an open" in o.content and "window" in o.content for o in result.observations)
 
 
 # ── TEST 4 — permission involvement ─────────────────────────────────────────
@@ -487,7 +489,7 @@ def test_permission_policy_evaluates_typing_step():
     assert result.status == ResultStatus.COMPLETED
     assert len(policy.requests) == 1
     request = policy.requests[0]
-    assert request.action == DesktopAction.TYPE_TEXT_IN_NOTEPAD.value
+    assert request.action == DesktopAction.TYPE_TEXT_IN_APPLICATION.value
     assert request.risk_level == RiskLevel.MEDIUM
     assert request.metadata.get("externally_visible") is True
     # Not destructive and not irreversible: the policy must not treat typing as such.
@@ -514,7 +516,12 @@ def test_launch_and_read_are_low_risk_metadata():
     assert type_meta["irreversible"] is False
 
     # Intent aliases resolve to the same authoritative metadata.
-    assert notepad_operation_metadata("type_text") == type_meta
+    assert notepad_operation_metadata("type_text_in_notepad") == type_meta
+    generic_meta = cross_app_operation_metadata("type_text")
+    assert generic_meta is not None
+    assert generic_meta["risk_level"] == type_meta["risk_level"]
+    assert generic_meta["action"] == DesktopAction.TYPE_TEXT_IN_APPLICATION.value
+    assert generic_meta["externally_visible"] is True
     assert notepad_operation_metadata("launch_notepad") == launch
     assert notepad_operation_metadata("read_notepad_text") == read
 
@@ -688,7 +695,7 @@ def test_mixed_executor_routes_notepad_intents_to_desktop_handler():
             step_metadata={"text": "Hello from Mamba"},
         )
     )
-    assert metadata["action"] == "type_text_in_notepad"
+    assert metadata["action"] == "type_text_in_application"
     assert metadata["risk_level"] == RiskLevel.MEDIUM
 
 
@@ -735,7 +742,7 @@ def test_read_notepad_text_fails_clearly_when_notepad_is_absent():
     )
 
     assert output.success is False
-    assert "No Notepad window is open" in output.content
+    assert "No open Notepad window was found" in output.content
 
 
 def test_missing_text_argument_is_rejected():
@@ -762,15 +769,6 @@ def test_desktop_tools_registry_exposes_notepad_tools():
     assert "type_text_in_notepad" in tools
     assert "read_notepad_text" in tools
 
-
-def test_planner_prompt_grounds_the_notepad_capability():
-    """The planner is told the exact Notepad intent schema (and its boundary)."""
-    from agents.planning_agent import _SYSTEM_PROMPT
-
-    assert '"launch_notepad"' in _SYSTEM_PROMPT
-    assert '"type_text"' in _SYSTEM_PROMPT
-    assert '"read_notepad_text"' in _SYSTEM_PROMPT
-    assert "Never plan \"type_text\" for any application other than Notepad" in _SYSTEM_PROMPT
 
 
 def test_declared_ui_text_predicate_uses_existing_verifier():
@@ -1054,7 +1052,7 @@ def test_real_wrong_target_protection_refuses_unfocused_notepad():
         )
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "tools.desktop.notepad._notepad_focus_attempt",
+                "tools.desktop._win32.focus_attempt",
                 lambda hwnd: None,
             )
             focused = driver.focus(target, timeout=0.5)

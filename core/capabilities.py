@@ -252,7 +252,7 @@ def default_capability_registry(
             name="Desktop & Windows",
             description=(
                 "Launch applications, open URLs in browser, focus windows, manage "
-                "clipboard, and interact with Windows Notepad."
+                "clipboard, and interact with supported applications."
             ),
             supported_actions=(
                 "open_url",
@@ -265,18 +265,18 @@ def default_capability_registry(
                 "read_clipboard",
                 "write_clipboard",
                 "clear_clipboard",
-                "launch_notepad",
+                "inspect_applications",
+                "launch_application",
                 "type_text",
-                "read_notepad_text",
+                "read_application_text",
             ),
             limitations=(
-                "Cross-application typing is limited to Windows Notepad: it can launch Notepad, focus the bound Notepad window, type text into it, and read its text back — it cannot type into any other application.",
-                "Can launch applications and open URLs in browser; cannot interact with in-page media controls like playing YouTube videos or click arbitrary web page buttons",
+                "Cross-application interaction supports: Notepad (launch, type, read back), Calculator (launch, observe display), File Explorer (launch a folder), and VS Code (launch). It cannot type into applications without a text field, and cannot interact with in-page media controls like playing YouTube videos or click arbitrary web page buttons.",
             ),
             unavailable_actions=(
+                "Typing into applications without a text field",
                 "In-page video playback",
                 "Arbitrary web button clicking",
-                "Typing into applications other than Notepad",
                 "Mouse cursor dragging",
             ),
             status=CapabilityStatus.AVAILABLE,

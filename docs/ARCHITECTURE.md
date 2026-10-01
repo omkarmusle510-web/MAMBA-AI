@@ -162,32 +162,47 @@ Mamba separates **reusable capabilities** from **external actions** across two l
 
 Flow per step: `PlanStep.intent` → mixed executor → skill handler → tool → handler → `Observation`. Skills never bypass tools for external effects; tools never plan.
 
-### 6.1 Cross-Application Interaction (Windows Notepad)
+### 6.1 Cross-Application Interaction (Supported Windows Applications)
 
-The first real cross-application capability lives in the existing desktop capability — it is **not** a separate intelligence system. There is no `DesktopBrain`, `DesktopAgent`, or `CrossAppOrchestrator`; the same Brain lifecycle drives it.
+Cross-application interaction lives inside the existing desktop capability — it is **not** a separate intelligence system. There is no `DesktopBrain`, `DesktopAgent`, `NotepadBrain`, `ChromeBrain`, or `CrossAppOrchestrator`; the same Brain lifecycle drives it, and adding an application is a **registry entry**, not new execution logic.
 
-`tools/desktop/notepad.py` (+ `notepad_tools.py`) implements a deliberately Notepad-only surface: launch, focus/type, and read-back. `skills/desktop.py` wraps those tools as `LaunchNotepadSkill`, `TypeTextInNotepadSkill`, and `ReadNotepadTextSkill`, and `DesktopTaskHandler` maps the intents (`launch_notepad`, `type_text`, `read_notepad_text`).
+Layering (each layer is generic; only the adapter record is application-specific):
+
+| Layer | Module | Responsibility |
+| :--- | :--- | :--- |
+| Win32 primitives | `tools/desktop/_win32.py` | enumerate/bind windows, foreground, focus reclamation, read a text control, key press, resolve executables |
+| Observation probes | `tools/desktop/observation.py` | the smallest reliable "did it happen?" mechanism per application: `TextControlProbe`, `ClipboardCopyProbe`, `WindowStateProbe` |
+| Adapter registry | `tools/desktop/apps.py` | one declarative record per application: identity (process/class/title), launch spec, observation probes, supported actions |
+| Generic driver | `tools/desktop/driver.py` | `CrossAppDriver`: discover / launch / bind / focus / type / observe, with target checks; `BoundApplicationDriver` scopes it to one app |
+| Generic tools | `tools/desktop/cross_app_tools.py` | `LaunchApplication`, `TypeTextInApplication`, `ReadApplicationText`, `InspectApplications` handlers + tools |
+| Skills | `skills/desktop.py` | `LaunchApplicationSkill`, `TypeTextInApplicationSkill`, `ReadApplicationTextSkill`, `InspectApplicationsSkill`, plus Notepad-scoped subclasses |
+| Compatibility | `tools/desktop/notepad.py`, `notepad_tools.py` | the Notepad surface as a thin preset of the generic layers |
+
+Supported applications (adapters): **Notepad** (launch, type, read back), **Calculator** (launch, observe display via its native Ctrl+C), **File Explorer** (launch at a folder, verify the folder window), **VS Code** (launch, window observation only). Applications that render their content without a Win32 control (Electron/UWP) declare no content probe, and Mamba then reports *executed but not independently verified* instead of claiming success.
 
 Flow for *"Open Notepad and type Hello from Mamba"*:
 
 ```
-intent launch_notepad      → launch the OS Notepad binary, bind the new window as the target
-intent type_text           → Brain pins {app: Notepad, text: ...} ON THE STEP, evaluates
-                             permission (MEDIUM → ALLOW), re-verifies the bound window is
-                             live Notepad AND the active foreground window, then types
-verification (automatic)   → reads the text back out of the bound window's editor control
-                             and passes it to DefaultVerifier as a `contains` predicate
+intent launch_application  → resolve "notepad" via the adapter registry (or default when
+                             the intent itself names Notepad)
+                           → launch the OS binary, bind the window that identifies as Notepad
+intent type_text           → Brain pins {app_id, text} ON THE STEP, evaluates permission
+                             (MEDIUM → ALLOW), re-verifies the bound window is live and is the
+                             ACTIVE window, then types
+verification (automatic)   → reads the text back out of the bound window through the adapter's
+                             declared probe and passes it to DefaultVerifier as `contains`
 → "Verified: 'Hello from Mamba' is present in the Notepad window"
 ```
 
 Safety properties enforced by construction:
 
-- **Explicit target binding.** A Notepad target is accepted only if it is a visible top-level window of class `Notepad`, owned by a `Notepad.exe` process, re-verified at use time. A stale handle from an earlier task or a foreign application handle is rejected — never silently replaced by "whatever is focused".
-- **Verify before typing.** The bound window must be the current foreground window immediately before the first keystroke. Otherwise the action stops with a clear failure instead of typing into an unrelated application. Windows' foreground lock is cleared with the standard `AttachThreadInput`/ALT-activation workaround; the force-switching `SwitchToThisWindow` API is deliberately **not** used.
-- **Observation, not assumption.** Typing is never treated as proof. The outcome is observed by reading the window's own text control; if that cannot be read, the result is reported **inconclusive** rather than success.
-- **No destructive or arbitrary operations.** No close, delete, overwrite, or shutdown is implemented, and typing is impossible into any application other than Notepad.
+- **Explicit target binding.** A window is a target only if it positively identifies as a supported application: expected process name, window class, and title pattern, re-verified at the moment of use. A stale handle from an earlier task, a foreign application handle, or an unknown window is refused — never silently replaced by "whatever is focused".
+- **Verify before typing.** The bound window must be the current foreground window immediately before the first keystroke; otherwise the action stops with a clear failure. Windows' foreground lock is cleared with the standard `AttachThreadInput`/ALT-activation workaround; the force-switching `SwitchToThisWindow` API is deliberately **not** used.
+- **Per-application capability declaration.** Typing requires the adapter to set `supports_text_input`; applications without it (Calculator, VS Code, File Explorer) refuse typing rather than being typed into blindly.
+- **Observation, not assumption.** The outcome is read back through the adapter's declared probe. If nothing can observe it, the result is **inconclusive** (or "executed but not independently verified"), never success. Where the live result cannot be verified, the reported result says so.
+- **No destructive or arbitrary operations.** No close, delete, overwrite, or shutdown is implemented anywhere in this layer; there is no arbitrary-application launcher, no arbitrary window text reader, and no generic RPA/DSL surface.
 
-Permission metadata (authoritative, from `DESKTOP_OPERATIONS`): `launch_notepad` and `read_notepad_text` are `LOW`; `type_text_in_notepad` is `MEDIUM` with `externally_visible=True` and `destructive=False` / `irreversible=False`. Under the existing policy MEDIUM maps to ALLOW, so no second confirmation mechanism is introduced.
+Permission metadata (authoritative, from `DESKTOP_OPERATIONS`): launching and reading are `LOW`; typing into an application is `MEDIUM` with `externally_visible=True` and `destructive=False` / `irreversible=False`. Under the existing policy MEDIUM maps to ALLOW, so no second confirmation mechanism is introduced and nothing risky is auto-authorized.
 
 ---
 
@@ -399,7 +414,7 @@ CORS is permissive (loopback desktop use). Approval pauses surface as `awaiting_
 
 - **Core lifecycle** — intake, referent resolution, context, memory retrieval, capability-grounded planning, permission-gated execution, observation, verification, replanning, memory update (§3).
 - **13 capabilities** in the registry: filesystem, terminal, desktop, system, screen (+OCR), web, github, memory, analyze, project_understanding — plus email/calendar/messaging skill wiring (see partial).
-- **Cross-application interaction (Notepad)** — the desktop capability can launch Windows Notepad, bind its window as an explicit target, focus it, type text into it, and read the text back to verify the outcome (§6.1). Bounded to Notepad by design.
+- **Cross-application interaction** — the desktop capability can launch supported applications (Notepad, Calculator, File Explorer, VS Code), bind the exact target window, focus it, type into applications that declare a text field, and observe outcomes through each application's declared probe (§6.1). Adding an application is a registry entry; Core, permissions, and verification are unchanged.
 - **Permissions** — LOW/MEDIUM→ALLOW, HIGH→ASK, CRITICAL→DENY, metadata escalation, phrase-based approval/denial/resume (§8).
 - **Verification** — predicate checks with replan-on-failure (§9).
 - **Memory** — SQLite WAL, local embeddings + keyword fallback, supersession, transient filtering (§10).
@@ -472,8 +487,8 @@ electron/ .................. desktop shell (main, backend/frontend/lifecycle/
 src/ ....................... React UI (MambaApp, FloatingOrb, orb shaders,
                              audio WS session, wake word, settings)
 docs/ ...................... this documentation set
-tests/ ..................... 188 tests across 13 files (incl. cross-app Notepad
-                             tests; real-desktop cases opt in via
+tests/ ..................... 207 tests across 14 files (incl. cross-application
+                             adapter tests; real-desktop cases opt in via
                              MAMBA_REAL_DESKTOP_TESTS=1)
 .mamba/ .................... runtime data (memory.db, settings.json,
                              reminders.json) — created at runtime, gitignored

@@ -8,11 +8,23 @@ import webbrowser
 
 from core.context import ExecutionContext
 from tasks.types import TaskInput, TaskOutput
+from tools.desktop.apps import APP_NOTEPAD, ApplicationRegistry, default_application_registry
 from tools.desktop.clipboard import (
     ClearClipboardTool,
     ReadClipboardTool,
     WriteClipboardTool,
 )
+from tools.desktop.cross_app_tools import (
+    InspectApplicationsHandler,
+    InspectApplicationsTool,
+    LaunchApplicationHandler,
+    LaunchApplicationTool,
+    ReadApplicationTextHandler,
+    ReadApplicationTextTool,
+    TypeTextInApplicationHandler,
+    TypeTextInApplicationTool,
+)
+from tools.desktop.driver import BoundApplicationDriver, CrossAppDriver
 from tools.desktop.notepad import (
     NotepadDriver,
     WindowsNotepadDriver,
@@ -28,7 +40,7 @@ from tools.desktop.notepad_tools import (
 from tools.desktop.types import (
     DESKTOP_OPERATIONS,
     DesktopAction,
-    notepad_operation_for,
+    cross_app_action_for,
 )
 from tools.desktop.window import (
     CloseWindowTool,
@@ -68,7 +80,15 @@ _OPEN_URL_INTENTS = frozenset(
     {"open_url", "launch_url", "browse", "open_browser"}
 )
 
-# ── Cross-app (Notepad) intents ──
+# ── Cross-application intents ──
+_LAUNCH_APP_INTENTS = frozenset(
+    {
+        "launch_application",
+        "open_application",
+        "start_application",
+        "activate_application",
+    }
+)
 _LAUNCH_NOTEPAD_INTENTS = frozenset(
     {"launch_notepad", "open_notepad", "start_notepad"}
 )
@@ -80,13 +100,37 @@ _TYPE_TEXT_INTENTS = frozenset(
         "type_into_notepad",
         "write_in_notepad",
         "enter_text",
+        "type_text_in_application",
+        "write_in_application",
     }
 )
-_READ_NOTEPAD_TEXT_INTENTS = frozenset(
-    {"read_notepad_text", "notepad_text", "get_notepad_text"}
+_READ_APP_TEXT_INTENTS = frozenset(
+    {
+        "read_notepad_text",
+        "notepad_text",
+        "get_notepad_text",
+        "read_application_text",
+        "application_text",
+        "read_app_text",
+    }
+)
+_INSPECT_APPS_INTENTS = frozenset(
+    {
+        "inspect_applications",
+        "list_applications",
+        "supported_applications",
+        "find_application",
+    }
 )
 
-_NOTEPAD_INTENTS = _LAUNCH_NOTEPAD_INTENTS | _TYPE_TEXT_INTENTS | _READ_NOTEPAD_TEXT_INTENTS
+_CROSS_APP_INTENTS = (
+    _LAUNCH_APP_INTENTS
+    | _LAUNCH_NOTEPAD_INTENTS
+    | _TYPE_TEXT_INTENTS
+    | _READ_APP_TEXT_INTENTS
+    | _INSPECT_APPS_INTENTS
+)
+
 
 
 
@@ -392,35 +436,56 @@ class ClearClipboardSkill(BaseSkill):
         )
 
 
-# ── Cross-application (Notepad) skills ──────────────────────────────────────
+def _notepad_only_registry(registry: ApplicationRegistry | None) -> ApplicationRegistry:
+    """A registry advertising only the Notepad adapter.
+
+    Notepad-flavoured intents (``type_text_in_notepad``, ``read_notepad_text``…)
+    are scoped to Notepad: naming a different application makes resolution fail
+    with a clear "unsupported application" error rather than acting elsewhere.
+    """
+    source = registry or default_application_registry()
+    notepad = source.get(APP_NOTEPAD)
+    if notepad is None:  # pragma: no cover - the default registry always has it
+        return source
+    return ApplicationRegistry((notepad,))
 
 
-class LaunchNotepadSkill(BaseSkill):
-    """Launch Notepad and bind the new window as the target for later steps."""
+def _cross_app_driver_for(
+    driver: CrossAppDriver | None,
+    registry: ApplicationRegistry | None,
+) -> CrossAppDriver:
+    if driver is not None:
+        return driver
+    return CrossAppDriver(registry=registry or default_application_registry())
 
-    def __init__(
-        self,
-        tool: BaseTool | None = None,
-        executor: ToolExecutor | None = None,
-        driver: NotepadDriver | None = None,
-    ) -> None:
-        defn = DESKTOP_OPERATIONS[DesktopAction.LAUNCH_NOTEPAD]
+
+class _CrossAppSkill(BaseSkill):
+    """Shared plumbing for cross-application skills.
+
+    The skill layer stays thin: it forwards the step's operational metadata to
+    the authoritative tool for the intent, and passes the tool's observation
+    through unchanged (including the target-binding and observation metadata that
+    the Brain's verification step relies on).
+    """
+
+    def __init__(self, defn, tool: BaseTool, executor: ToolExecutor | None = None) -> None:
         super().__init__(
-            Skill(
-                name=defn.name,
-                description=defn.description,
-                metadata=defn.to_metadata(),
-            )
+            Skill(name=defn.name, description=defn.description, metadata=defn.to_metadata())
         )
-        self._tool = tool or LaunchNotepadTool(handler=LaunchNotepadHandler(driver=driver))
+        self._tool = tool
         self._executor = executor or StandardToolExecutor()
 
+    @property
+    def tool_handler(self) -> Any:
+        """The tool handler behind this skill, for inspection and wiring checks."""
+        return getattr(self._tool, "_handler", None)
+
     def execute(self, input: SkillInput) -> SkillOutput:
-        tool_input = ToolInput(
-            arguments=dict(input.task_input.step_metadata),
-            metadata=dict(input.task_input.step_metadata),
+        meta = dict(input.task_input.step_metadata)
+        tool_output = self._executor.execute(
+            self._tool,
+            ToolInput(arguments=dict(meta), metadata=dict(meta)),
         )
-        tool_output = self._executor.execute(self._tool, tool_input)
         return SkillOutput(
             content=str(tool_output.result or tool_output.error or ""),
             success=tool_output.success,
@@ -428,81 +493,147 @@ class LaunchNotepadSkill(BaseSkill):
         )
 
 
-class TypeTextInNotepadSkill(BaseSkill):
+class LaunchApplicationSkill(_CrossAppSkill):
+    """Launch a supported application and bind the window that appears."""
+
+    def __init__(
+        self,
+        *,
+        driver: CrossAppDriver | None = None,
+        registry: ApplicationRegistry | None = None,
+        default_app_id: str | None = None,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.LAUNCH_APPLICATION]
+        super().__init__(
+            defn,
+            tool
+            or LaunchApplicationTool(
+                handler=LaunchApplicationHandler(
+                    _cross_app_driver_for(driver, registry),
+                    registry=registry,
+                    default_app_id=default_app_id,
+                )
+            ),
+            executor,
+        )
+
+
+class TypeTextInApplicationSkill(_CrossAppSkill):
+    """Type text into an explicitly bound, verified-active application window."""
+
+    def __init__(
+        self,
+        *,
+        driver: CrossAppDriver | None = None,
+        registry: ApplicationRegistry | None = None,
+        default_app_id: str | None = None,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.TYPE_TEXT_IN_APPLICATION]
+        super().__init__(
+            defn,
+            tool
+            or TypeTextInApplicationTool(
+                handler=TypeTextInApplicationHandler(
+                    _cross_app_driver_for(driver, registry),
+                    registry=registry,
+                    default_app_id=default_app_id,
+                )
+            ),
+            executor,
+        )
+
+
+class ReadApplicationTextSkill(_CrossAppSkill):
+    """Read an application's currently observable content."""
+
+    def __init__(
+        self,
+        *,
+        driver: CrossAppDriver | None = None,
+        registry: ApplicationRegistry | None = None,
+        default_app_id: str | None = None,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.READ_APPLICATION_TEXT]
+        super().__init__(
+            defn,
+            tool
+            or ReadApplicationTextTool(
+                handler=ReadApplicationTextHandler(
+                    _cross_app_driver_for(driver, registry),
+                    registry=registry,
+                    default_app_id=default_app_id,
+                )
+            ),
+            executor,
+        )
+
+
+class InspectApplicationsSkill(_CrossAppSkill):
+    """Report which applications Mamba supports and which are open."""
+
+    def __init__(
+        self,
+        *,
+        driver: CrossAppDriver | None = None,
+        registry: ApplicationRegistry | None = None,
+        default_app_id: str | None = None,
+        tool: BaseTool | None = None,
+        executor: ToolExecutor | None = None,
+    ) -> None:
+        defn = DESKTOP_OPERATIONS[DesktopAction.INSPECT_APPLICATIONS]
+        super().__init__(
+            defn,
+            tool
+            or InspectApplicationsTool(
+                handler=InspectApplicationsHandler(_cross_app_driver_for(driver, registry))
+            ),
+            executor,
+        )
+
+
+# Notepad-flavoured skills: the generic skill with the application fixed.
+class LaunchNotepadSkill(LaunchApplicationSkill):
+    """Launch Notepad and bind the new window as the target."""
+
+    def __init__(self, registry: ApplicationRegistry | None = None, **kwargs: Any) -> None:
+        super().__init__(
+            registry=registry or _notepad_only_registry(None),
+            default_app_id=APP_NOTEPAD,
+            **kwargs,
+        )
+
+
+class TypeTextInNotepadSkill(TypeTextInApplicationSkill):
     """Type text into an explicitly bound Notepad window."""
 
-    def __init__(
-        self,
-        tool: BaseTool | None = None,
-        executor: ToolExecutor | None = None,
-        driver: NotepadDriver | None = None,
-    ) -> None:
-        defn = DESKTOP_OPERATIONS[DesktopAction.TYPE_TEXT_IN_NOTEPAD]
+    def __init__(self, registry: ApplicationRegistry | None = None, **kwargs: Any) -> None:
         super().__init__(
-            Skill(
-                name=defn.name,
-                description=defn.description,
-                metadata=defn.to_metadata(),
-            )
-        )
-        self._tool = tool or TypeTextInNotepadTool(
-            handler=TypeTextInNotepadHandler(driver=driver)
-        )
-        self._executor = executor or StandardToolExecutor()
-
-    def execute(self, input: SkillInput) -> SkillOutput:
-        meta = input.task_input.step_metadata
-        tool_input = ToolInput(
-            arguments=dict(meta),
-            metadata=dict(meta),
-        )
-        tool_output = self._executor.execute(self._tool, tool_input)
-        return SkillOutput(
-            content=str(tool_output.result or tool_output.error or ""),
-            success=tool_output.success,
-            metadata=tool_output.metadata,
+            registry=registry or _notepad_only_registry(None),
+            default_app_id=APP_NOTEPAD,
+            **kwargs,
         )
 
 
-class ReadNotepadTextSkill(BaseSkill):
-    """Read the current text content of a bound Notepad window."""
+class ReadNotepadTextSkill(ReadApplicationTextSkill):
+    """Read text back out of a bound Notepad window."""
 
-    def __init__(
-        self,
-        tool: BaseTool | None = None,
-        executor: ToolExecutor | None = None,
-        driver: NotepadDriver | None = None,
-    ) -> None:
-        defn = DESKTOP_OPERATIONS[DesktopAction.READ_NOTEPAD_TEXT]
+    def __init__(self, registry: ApplicationRegistry | None = None, **kwargs: Any) -> None:
         super().__init__(
-            Skill(
-                name=defn.name,
-                description=defn.description,
-                metadata=defn.to_metadata(),
-            )
-        )
-        self._tool = tool or ReadNotepadTextTool(
-            handler=ReadNotepadTextHandler(driver=driver)
-        )
-        self._executor = executor or StandardToolExecutor()
-
-    def execute(self, input: SkillInput) -> SkillOutput:
-        meta = input.task_input.step_metadata
-        tool_input = ToolInput(
-            arguments=dict(meta),
-            metadata=dict(meta),
-        )
-        tool_output = self._executor.execute(self._tool, tool_input)
-        return SkillOutput(
-            content=str(tool_output.result or tool_output.error or ""),
-            success=tool_output.success,
-            metadata=tool_output.metadata,
+            registry=registry or _notepad_only_registry(None),
+            default_app_id=APP_NOTEPAD,
+            **kwargs,
         )
 
 
 @dataclass(slots=True)
 class DesktopTaskHandler:
-    """Dispatches desktop/window/clipboard task inputs to concrete skills."""
+    """Dispatches desktop/window/clipboard/cross-app task inputs to concrete skills."""
 
     get_foreground_window_skill: GetForegroundWindowSkill | None = None
     get_window_title_skill: GetWindowTitleSkill | None = None
@@ -513,10 +644,23 @@ class DesktopTaskHandler:
     write_clipboard_skill: WriteClipboardSkill | None = None
     clear_clipboard_skill: ClearClipboardSkill | None = None
     open_url_skill: OpenURLSkill | None = None
-    launch_notepad_skill: LaunchNotepadSkill | None = None
-    type_text_in_notepad_skill: TypeTextInNotepadSkill | None = None
-    read_notepad_text_skill: ReadNotepadTextSkill | None = None
+    launch_application_skill: BaseSkill | None = None
+    type_text_in_application_skill: BaseSkill | None = None
+    read_application_text_skill: BaseSkill | None = None
+    inspect_applications_skill: BaseSkill | None = None
+    launch_notepad_skill: BaseSkill | None = None
+    type_text_in_notepad_skill: BaseSkill | None = None
+    read_notepad_text_skill: BaseSkill | None = None
+    cross_app_driver: CrossAppDriver | None = None
     notepad_driver: NotepadDriver | None = None
+    application_registry: ApplicationRegistry | None = None
+    notepad_registry: ApplicationRegistry | None = None
+    """Registry whose supported-applications list is the Notepad adapter only.
+
+    Used for Notepad-flavoured intents, so ``"notepad"`` is the default
+    application while an explicitly named *different* application is still
+    rejected as unsupported rather than silently acted on.
+    """
 
     def __post_init__(self) -> None:
         if self.get_foreground_window_skill is None:
@@ -538,20 +682,105 @@ class DesktopTaskHandler:
         if self.open_url_skill is None:
             self.open_url_skill = OpenURLSkill()
 
-        notepad_driver = self.notepad_driver
-        notepad_needed = (
-            self.launch_notepad_skill is None
-            or self.type_text_in_notepad_skill is None
-            or self.read_notepad_text_skill is None
-        )
-        if notepad_driver is None and notepad_needed:
-            notepad_driver = WindowsNotepadDriver()
+        cross_app, notepad = self._cross_app_drivers()
+        full_registry = self.application_registry or default_application_registry()
+        notepad_registry = self.notepad_registry or _notepad_only_registry(full_registry)
+
+        # Notepad-flavoured intents: the application is fixed to Notepad.
         if self.launch_notepad_skill is None:
-            self.launch_notepad_skill = LaunchNotepadSkill(driver=notepad_driver)
+            self.launch_notepad_skill = LaunchNotepadSkill(
+                driver=notepad, registry=notepad_registry
+            )
         if self.type_text_in_notepad_skill is None:
-            self.type_text_in_notepad_skill = TypeTextInNotepadSkill(driver=notepad_driver)
+            self.type_text_in_notepad_skill = TypeTextInNotepadSkill(
+                driver=notepad, registry=notepad_registry
+            )
         if self.read_notepad_text_skill is None:
-            self.read_notepad_text_skill = ReadNotepadTextSkill(driver=notepad_driver)
+            self.read_notepad_text_skill = ReadNotepadTextSkill(
+                driver=notepad, registry=notepad_registry
+            )
+
+        # Generic intents: resolve whichever supported application is named.
+        if self.launch_application_skill is None:
+            self.launch_application_skill = LaunchApplicationSkill(
+                driver=cross_app, registry=full_registry
+            )
+        if self.type_text_in_application_skill is None:
+            self.type_text_in_application_skill = TypeTextInApplicationSkill(
+                driver=cross_app, registry=full_registry
+            )
+        if self.read_application_text_skill is None:
+            self.read_application_text_skill = ReadApplicationTextSkill(
+                driver=cross_app, registry=full_registry
+            )
+        if self.inspect_applications_skill is None:
+            self.inspect_applications_skill = InspectApplicationsSkill(
+                driver=cross_app,
+                registry=full_registry,
+            )
+
+    def _cross_app_drivers(self) -> tuple[Any, NotepadDriver | None]:
+        """Resolve the generic driver and the Notepad-facing driver.
+
+        One driver instance serves every application; the Notepad surface is the
+        same driver scoped to the Notepad adapter. A socket-style driver (custom
+        integration or test double) is accepted as-is and used for every skill,
+        so an injected driver is never silently bypassed.
+        """
+        socket_driver: Any = None
+        if self.notepad_driver is not None:
+            inner = getattr(self.notepad_driver, "driver", None)
+            if isinstance(inner, CrossAppDriver):
+                socket_driver = inner
+            else:
+                socket_driver = self.notepad_driver
+        generic = self.cross_app_driver
+
+        if generic is not None and socket_driver is not None:
+            return generic, self.notepad_driver
+        if generic is not None:
+            return generic, BoundApplicationDriver(generic, APP_NOTEPAD)
+        if socket_driver is not None:
+            return socket_driver, self.notepad_driver or socket_driver
+        created = CrossAppDriver(
+            registry=self.application_registry or default_application_registry()
+        )
+        return created, BoundApplicationDriver(created, APP_NOTEPAD)
+
+    @property
+    def registry(self) -> ApplicationRegistry:
+        """The application registry this handler acts on.
+
+        A Notepad-scoped wiring (only ``notepad_driver`` was injected) reports
+        just the Notepad adapter, so the execution layer sees exactly what the
+        capability can target. A generic wiring reports every supported adapter.
+        """
+        if self.application_registry is not None:
+            return self.application_registry
+        if self.cross_app_driver is None and self.notepad_driver is not None:
+            return self.notepad_registry or _notepad_only_registry(None)
+        return default_application_registry()
+
+    @staticmethod
+    def _implies_notepad(meta: dict[str, Any]) -> bool:
+        """Whether a step's metadata already points at Notepad.
+
+        Generic intents (``type_text``) are routed to the Notepad-scoped skill
+        when the step names Notepad (or names nothing while carrying a window
+        handle), so an unspecified application keeps its unambiguous Notepad
+        default while an explicitly named other application takes the generic
+        path — and is then resolved or rejected on its own merits.
+        """
+        raw = str(
+            meta.get("app_id")
+            or meta.get("app")
+            or meta.get("application")
+            or meta.get("target_app")
+            or ""
+        ).strip().lower()
+        if raw in ("", "notepad", "notepad.exe"):
+            return True
+        return False
 
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
         """Return authoritative capability security metadata for this intent."""
@@ -561,9 +790,9 @@ class DesktopTaskHandler:
             or ""
         ).strip().lower()
 
-        notepad_meta = notepad_operation_for(intent)
-        if notepad_meta is not None:
-            return DESKTOP_OPERATIONS[notepad_meta].to_metadata()
+        cross_app_meta = cross_app_action_for(intent)
+        if cross_app_meta is not None:
+            return DESKTOP_OPERATIONS[cross_app_meta].to_metadata()
 
         if intent in _OPEN_URL_INTENTS:
             return DESKTOP_OPERATIONS[DesktopAction.OPEN_URL].to_metadata()
@@ -594,18 +823,37 @@ class DesktopTaskHandler:
         ).strip().lower()
 
         skill_input = SkillInput.from_task(task_input, context)
+        step_meta = dict(task_input.step_metadata)
+
+        # ── cross-application intents ──
+        # Notepad-flavoured intents use the Notepad-scoped skills (the application
+        # is fixed, and any other application is rejected as unsupported); generic
+        # intents use the application named in the step's metadata.
+        if intent in _INSPECT_APPS_INTENTS:
+            assert self.inspect_applications_skill is not None
+            return self.inspect_applications_skill.run(skill_input).to_task_output()
+
+        if intent in _LAUNCH_APP_INTENTS:
+            assert self.launch_application_skill is not None
+            return self.launch_application_skill.run(skill_input).to_task_output()
 
         if intent in _LAUNCH_NOTEPAD_INTENTS:
             assert self.launch_notepad_skill is not None
             return self.launch_notepad_skill.run(skill_input).to_task_output()
 
         if intent in _TYPE_TEXT_INTENTS:
-            assert self.type_text_in_notepad_skill is not None
-            return self.type_text_in_notepad_skill.run(skill_input).to_task_output()
+            if self._implies_notepad(step_meta):
+                assert self.type_text_in_notepad_skill is not None
+                return self.type_text_in_notepad_skill.run(skill_input).to_task_output()
+            assert self.type_text_in_application_skill is not None
+            return self.type_text_in_application_skill.run(skill_input).to_task_output()
 
-        if intent in _READ_NOTEPAD_TEXT_INTENTS:
-            assert self.read_notepad_text_skill is not None
-            return self.read_notepad_text_skill.run(skill_input).to_task_output()
+        if intent in _READ_APP_TEXT_INTENTS:
+            if self._implies_notepad(step_meta):
+                assert self.read_notepad_text_skill is not None
+                return self.read_notepad_text_skill.run(skill_input).to_task_output()
+            assert self.read_application_text_skill is not None
+            return self.read_application_text_skill.run(skill_input).to_task_output()
 
         if intent in _OPEN_URL_INTENTS:
             assert self.open_url_skill is not None

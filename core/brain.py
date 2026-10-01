@@ -41,37 +41,64 @@ from .types import (
 
 _DEFAULT_MAX_CYCLES = 10
 
-# ── Cross-application (Notepad) target binding & outcome verification ───────
-# Intents that are only ever meaningful against Windows Notepad.
-_NOTEPAD_LAUNCH_INTENTS: frozenset[str] = frozenset(
-    {"launch_notepad", "open_notepad", "start_notepad"}
+# ── Cross-application target binding & outcome verification ─────────────────
+# Intents that act on a supported application window. The application itself is
+# named in the step metadata and resolved through the desktop capability's
+# adapter registry, so this stays application-agnostic: adding an application
+# adapter does not change Core.
+_CROSS_APP_LAUNCH_INTENTS: frozenset[str] = frozenset(
+    {
+        "launch_application",
+        "open_application",
+        "start_application",
+        "activate_application",
+        # Notepad-flavoured aliases (thin adapters, not special cases)
+        "launch_notepad",
+        "open_notepad",
+        "start_notepad",
+    }
 )
-_NOTEPAD_TEXT_INTENTS: frozenset[str] = frozenset(
+_CROSS_APP_TEXT_INTENTS: frozenset[str] = frozenset(
     {
         "type_text",
+        "enter_text",
+        "type_text_in_application",
+        "write_in_application",
+        # Notepad-flavoured aliases
         "type_text_in_notepad",
         "type_in_notepad",
         "type_into_notepad",
         "write_in_notepad",
-        "enter_text",
     }
 )
-_NOTEPAD_READ_INTENTS: frozenset[str] = frozenset(
-    {"read_notepad_text", "notepad_text", "get_notepad_text"}
+_CROSS_APP_INSPECT_INTENTS: frozenset[str] = frozenset(
+    {
+        "inspect_applications",
+        "list_applications",
+        "supported_applications",
+        "find_application",
+    }
 )
-_NOTEPAD_INTENTS: frozenset[str] = (
-    _NOTEPAD_LAUNCH_INTENTS | _NOTEPAD_TEXT_INTENTS | _NOTEPAD_READ_INTENTS
+_CROSS_APP_INTENTS: frozenset[str] = (
+    _CROSS_APP_LAUNCH_INTENTS | _CROSS_APP_TEXT_INTENTS | _CROSS_APP_INSPECT_INTENTS
 )
 
-_NOTEPAD_APP = "Notepad"
-"""The only application Mamba's cross-app typing capability targets in this phase."""
+# Read intents that observe an application's content, in preference order.
+_CROSS_APP_READ_INTENTS: tuple[str, ...] = (
+    "read_application_text",
+    "read_notepad_text",
+)
 
 _UI_TEXT_PREDICATE_KEY = "ui_text_contains"
-"""Expected-predicate that verifies an outcome by reading it back out of a GUI."""
+"""Expected-predicate that verifies an outcome by observing the target's UI.
 
-_UI_TEXT_READ_INTENT = "read_notepad_text"
-"""Intent used to read a bound Notepad window's text back through the desktop
-capability (the same single code path used by the tool layer)."""
+The payload is ``{"app": "<adapter id>", "text": "<expected text>"}``; verification
+reads the text back through the desktop capability's own observation mechanism
+and hands it to the existing verifier as a ``contains`` comparison.
+"""
+
+_NOTEPAD_APP = "Notepad"
+"""The only application whose intents may omit an explicit application name."""
 
 
 def _step_text_argument(step: PlanStep) -> str:
@@ -84,13 +111,28 @@ def _step_text_argument(step: PlanStep) -> str:
 
 
 def _step_app_argument(step: PlanStep) -> str:
-    for key in ("app", "application", "target_app", "program"):
+    """Extract the application a step targets, from planner metadata."""
+    for key in ("app_id", "app", "application", "target_app", "program"):
         value = step.metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
 
 
+_NOTEPAD_FLAVOURED_INTENTS: frozenset[str] = frozenset(
+    {
+        "launch_notepad",
+        "open_notepad",
+        "start_notepad",
+        "type_text_in_notepad",
+        "type_in_notepad",
+        "type_into_notepad",
+        "write_in_notepad",
+        "read_notepad_text",
+        "notepad_text",
+        "get_notepad_text",
+    }
+)
 _NEEDS_REPLANNING_KEY = "needs_replanning"
 """ExecutionPlan.metadata key a planner sets to request another reasoning
 cycle after this plan's steps run, because it already expects to need
@@ -948,7 +990,7 @@ class Brain:
         # so a stale target or a different application can never be inferred at
         # execution time. If the target cannot be bound safely, execution stops
         # here rather than acting on an unknown application.
-        binding_error = self._bind_notepad_target(step)
+        binding_error = self._bind_cross_app_target(step)
         if binding_error:
             obs = Observation(
                 step_id=step.id,
@@ -1051,73 +1093,217 @@ class Brain:
 
         return _StepOutcome.FINISHED, ""
 
-    def _bind_notepad_target(self, step: PlanStep) -> str:
-        """Bind and freeze the Notepad action target on a plan step.
+    def _bind_cross_app_target(self, step: PlanStep) -> str:
+        """Bind and freeze the application action target on a plan step.
 
         Guarantees, before permission evaluation and execution:
 
-        * the application is explicitly ``Notepad`` (a step naming any other
-          application is refused — Mamba has no capability to type into
-          arbitrary applications);
+        * the requested application resolves to a *supported* adapter — a step
+          naming an unsupported or unknown application is refused rather than
+          acted on;
+        * the application requires an explicit name unless its intent already
+          names one (Notepad-flavoured intents), so nothing is inferred from
+          whichever window happens to be focused;
         * the payload text is captured on the step, so the same text is what
           gets typed, observed, and verified;
-        * the expected outcome predicate is pinned onto the step, so verification
-          checks whether the *requested text* appeared rather than whether
-          keystrokes were sent.
+        * the expected outcome predicate is pinned onto the step — verification
+          checks whether the *requested text* appeared, not whether keystrokes
+          were sent — but only when the application declares an observation
+          mechanism. Applications with no reliable observation are marked so the
+          result is reported as executed-but-unverified instead of assumed.
 
         Returns an error string when the target cannot be bound safely, or ""
         when the step is bound (or is not a cross-app step at all).
         """
         intent = step.intent.strip().lower()
-        if intent not in _NOTEPAD_INTENTS:
+        if intent not in _CROSS_APP_INTENTS:
             return ""
 
-        if intent in _NOTEPAD_TEXT_INTENTS:
-            app = _step_app_argument(step)
-            if app and app.strip().lower() not in ("notepad", "notepad.exe"):
-                return (
-                    f"Refusing to type: the requested application '{app}' is not "
-                    "supported. Mamba can only type into Notepad."
-                )
+        app_argument = _step_app_argument(step)
+
+        if intent in _CROSS_APP_INSPECT_INTENTS:
+            # Pure discovery: nothing is acted on, so no target must be bound.
+            return ""
+
+        if intent in _CROSS_APP_LAUNCH_INTENTS:
+            # Launching needs no pre-bound window, but a named application must
+            # resolve to a supported adapter before anything is started.
+            if app_argument:
+                adapter = self._resolve_application(app_argument)
+                if adapter is None:
+                    return self._unsupported_application_message(app_argument)
+                step.metadata.setdefault("app_id", adapter.app_id)
+                step.metadata.setdefault("app", adapter.display_name)
+            return ""
+
+        if intent in _CROSS_APP_TEXT_INTENTS:
             text = _step_text_argument(step)
             if not text:
-                return (
-                    "Refusing to type: the request did not specify any text to type."
-                )
-            step.metadata.setdefault("app", _NOTEPAD_APP)
+                return "Refusing to type: the request did not specify any text to type."
+
+            # The application may be named directly, carried from a previously
+            # bound window, or implied by an explicit window handle. A handle is
+            # only ever accepted if it verifies as the requested application, so
+            # naming the application explicitly remains the unambiguous case.
+            if not app_argument:
+                app_argument = str(step.metadata.get("app_id") or "")
+            if not app_argument and step.metadata.get("hwnd") is None:
+                if self._implies_notepad(step):
+                    app_argument = _NOTEPAD_APP
+                else:
+                    return (
+                        "Refusing to type: no target application was specified. State "
+                        "which supported application to type into."
+                    )
+
+            if app_argument:
+                adapter = self._resolve_application(app_argument, required=True)
+                if adapter is None:
+                    return self._unsupported_application_message(app_argument)
+                if not getattr(adapter, "supports_text_input", False):
+                    return (
+                        f"Refusing to type: typing text into {adapter.display_name} is not "
+                        "a supported action."
+                    )
+                step.metadata["app_id"] = adapter.app_id
+                step.metadata["app"] = adapter.display_name
+
+                observable = bool(getattr(adapter, "probes", ()))
+                step.metadata["outcome_observable"] = observable
+                expected = step.metadata.get("expected")
+                if observable and (
+                    not isinstance(expected, dict) or _UI_TEXT_PREDICATE_KEY not in expected
+                ):
+                    step.metadata["expected"] = {
+                        _UI_TEXT_PREDICATE_KEY: {
+                            "app": adapter.app_id,
+                            "app_name": adapter.display_name,
+                            "text": text,
+                        }
+                    }
+                elif not observable:
+                    # No observation mechanism: never pin an expected predicate that
+                    # could only be "confirmed" by the action's own report.
+                    if isinstance(expected, dict) and _UI_TEXT_PREDICATE_KEY in expected:
+                        step.metadata.pop("expected", None)
+
             # Pin the payload used for typing and for verification.
             step.metadata["text"] = text
-            expected = step.metadata.get("expected")
-            if not isinstance(expected, dict) or _UI_TEXT_PREDICATE_KEY not in expected:
-                step.metadata["expected"] = {
-                    _UI_TEXT_PREDICATE_KEY: {"app": _NOTEPAD_APP, "text": text}
-                }
             return ""
 
-        step.metadata.setdefault("app", _NOTEPAD_APP)
         return ""
 
-    def _execute_notepad_read(
+    # ── application resolution (delegates to the desktop capability) ──
+
+    def _application_registry(self) -> Any:
+        """The desktop capability's application registry, when it is wired.
+
+        Application-scoped handlers (the Notepad-scoped wiring) report the
+        narrower registry they actually act on, so this reflects what the
+        capability can really target rather than every adapter Mamba knows about.
+        """
+        executor = self.executor
+        handlers = getattr(executor, "handlers", None)
+        if not isinstance(handlers, Mapping):
+            return None
+        candidates = (
+            "launch_notepad",
+            "type_text_in_notepad",
+            "read_notepad_text",
+            "launch_application",
+            "type_text",
+            "read_application_text",
+            "inspect_applications",
+        )
+        for intent in candidates:
+            handler = handlers.get(intent)
+            if handler is None:
+                continue
+            registry = getattr(handler, "_registry", None)
+            if registry is None:
+                registry = getattr(handler, "registry", None)
+            if registry is None:
+                continue
+            try:
+                if not list(registry.all()):
+                    continue
+            except Exception:
+                pass
+            return registry
+        return None
+
+    def _resolve_application(self, name: str, *, required: bool = False) -> Any:
+        """Resolve an application name to a supported adapter, if one exists."""
+        if not name:
+            return None
+        registry = self._application_registry()
+        if registry is None:
+            return None
+        try:
+            return registry.resolve(name)
+        except Exception:
+            return None
+
+    def _unsupported_application_message(self, name: str) -> str:
+        registry = self._application_registry()
+        supported = ""
+        if registry is not None:
+            try:
+                supported = ", ".join(a.app_id for a in registry.all())
+            except Exception:
+                supported = ""
+        suffix = f" Mamba currently supports: {supported}." if supported else ""
+        return (
+            f"'{name}' is not a supported application, so Mamba cannot interact with "
+            f"it.{suffix}"
+        )
+
+    def _implies_notepad(self, step: PlanStep) -> bool:
+        """Whether an unnamed target should be resolved as Notepad.
+
+        True when the intent itself names Notepad, or when the wired desktop
+        capability offers Notepad as its only supported application (the
+        Notepad-scoped wiring). A runtime that can act on several applications
+        gets no implicit default: the application must be named.
+        """
+        if step.intent.strip().lower() in _NOTEPAD_FLAVOURED_INTENTS:
+            return True
+        registry = self._application_registry()
+        if registry is None:
+            return False
+        try:
+            adapters = registry.all()
+        except Exception:
+            return False
+        return len(adapters) == 1 and adapters[0].app_id == "notepad"
+
+    def _execute_application_read(
         self,
         metadata: dict[str, Any],
     ) -> tuple[str | None, str]:
-        """Read a bound Notepad window's text back through the desktop capability.
+        """Observe a bound application window's content through the desktop capability.
 
-        Reuses the single existing desktop Notepad read path (the same tool the
-        ``read_notepad_text`` skill uses) rather than adding a second mechanism.
+        Reuses the single existing read path (the same tools the
+        ``read_application_text`` / ``read_notepad_text`` skills use) rather than
+        adding a second observation mechanism.
 
-        Returns (text, error). ``text`` is None when the text could not be read.
+        Returns (text, error). ``text`` is None when nothing could be observed.
         """
-        if not hasattr(self.executor, "handlers"):
-            return None, "no desktop capability is wired to read Notepad text"
         handlers = getattr(self.executor, "handlers", None)
-        if not isinstance(handlers, Mapping) or _UI_TEXT_READ_INTENT not in handlers:
-            return None, "no desktop capability is wired to read Notepad text"
+        if not isinstance(handlers, Mapping):
+            return None, "no desktop capability is wired to observe application content"
+
+        read_intent = next(
+            (intent for intent in _CROSS_APP_READ_INTENTS if intent in handlers), None
+        )
+        if read_intent is None:
+            return None, "no desktop capability is wired to observe application content"
 
         target_meta = {
             key: metadata[key]
             for key in (
                 "app",
+                "app_id",
                 "hwnd",
                 "target_title",
                 "target_pid",
@@ -1127,23 +1313,23 @@ class Brain:
             if metadata.get(key) is not None
         }
         read_input = TaskInput(
-            step_id="ui-text-read",
-            description="Read bound Notepad text for outcome verification",
-            intent=_UI_TEXT_READ_INTENT,
+            step_id="app-content-read",
+            description="Observe bound application content for outcome verification",
+            intent=read_intent,
             execution_id="verification",
-            goal="verify Notepad outcome",
+            goal="verify application outcome",
             step_metadata=target_meta,
         )
         try:
-            output = handlers[_UI_TEXT_READ_INTENT].run(read_input, None)  # type: ignore[arg-type]
+            output = handlers[read_intent].run(read_input, None)  # type: ignore[arg-type]
         except Exception as exc:
-            return None, f"reading Notepad text for verification failed: {exc}"
+            return None, f"observing application content for verification failed: {exc}"
 
         if not output.success:
-            return None, output.content or "could not read the Notepad window's text"
+            return None, output.content or "the application's content could not be observed"
         text = output.metadata.get("text")
         if not isinstance(text, str):
-            return None, "Notepad text could not be observed"
+            return None, "the application's content could not be observed"
         return text, ""
 
     def _evaluate_permission(
@@ -1290,7 +1476,7 @@ class Brain:
             "reply_message",
         ):
             return True
-        if intent_lower in _NOTEPAD_TEXT_INTENTS:
+        if intent_lower in _CROSS_APP_TEXT_INTENTS:
             # Typing keystrokes is an action; the *outcome* must be observed.
             return True
         return (
@@ -1318,7 +1504,7 @@ class Brain:
         # and the *existing* verifier decides VERIFIED / FAILED / INCONCLUSIVE.
         ui_predicate = expected.get(_UI_TEXT_PREDICATE_KEY) if isinstance(expected, dict) else None
         if ui_predicate is not None:
-            return self._verify_ui_text(step, observation, ui_predicate)
+            return self._verify_app_outcome(step, observation, ui_predicate)
 
         intent_lower = step.intent.lower()
         # Measure actual physical outcome when verify is requested without explicit expected
@@ -1366,58 +1552,71 @@ class Brain:
 
         return False, f"unknown verification status: {v_res.status}"
 
-    def _verify_ui_text(
+    def _verify_app_outcome(
         self,
         step: PlanStep,
         observation: Observation,
         predicate: Any,
     ) -> tuple[bool, str]:
-        """Verify a cross-app outcome by reading the text back out of the window.
+        """Verify a cross-application outcome by observing the target window.
 
         Separates two distinct facts:
 
         * the action executed — the step's observation reports whether text was
           typed and whether the bound target was the active window; and
-        * the requested outcome — the text actually present in the bound Notepad
-          window, read back through the existing desktop capability.
+        * the requested outcome — the content actually present in the bound
+          application window, observed back through the desktop capability's own
+          adapter-declared mechanism.
 
-        When the text cannot be observed (window gone, control unavailable, no
-        desktop capability wired), the result is reported as INCONCLUSIVE rather
-        than claimed as success.
+        When the outcome cannot be observed (window gone, no observation
+        mechanism, capability unavailable), the result is reported as
+        INCONCLUSIVE — or, for applications with no observation mechanism at all,
+        as "executed but not independently verified" — never claimed as success.
         """
         if isinstance(predicate, dict):
             expected_text = str(predicate.get("text") or "")
-            predicate_app = str(predicate.get("app") or _NOTEPAD_APP)
+            predicate_app = str(predicate.get("app") or "")
+            app_name = str(predicate.get("app_name") or predicate_app or "the target")
         else:
             expected_text = str(predicate or "")
-            predicate_app = _NOTEPAD_APP
+            predicate_app = ""
+            app_name = "the target"
 
-        if predicate_app.strip().lower() not in ("notepad", "notepad.exe"):
-            return False, (
-                f"verification failed: unsupported verification target "
-                f"'{predicate_app}' (only Notepad is supported)"
-            )
+        if predicate_app:
+            adapter = self._resolve_application(predicate_app, required=True)
+            if adapter is None:
+                return False, (
+                    f"verification failed: '{predicate_app}' is not a supported "
+                    "application, so the outcome cannot be confirmed"
+                )
+            app_name = getattr(adapter, "display_name", app_name)
 
         if not expected_text:
             return False, "verification failed: no expected text was recorded for this step"
 
+        if step.metadata.get("outcome_observable") is False:
+            return False, (
+                f"executed but not independently verified: {app_name} exposes no reliable "
+                "observation mechanism, so Mamba cannot confirm the requested text arrived"
+            )
+
         metadata = {**dict(step.metadata), **dict(observation.metadata)}
-        actual_text, read_error = self._execute_notepad_read(metadata)
+        actual_text, read_error = self._execute_application_read(metadata)
 
         if actual_text is None:
             return False, (
                 "verification inconclusive: the requested text could not be observed in "
-                f"the intended Notepad window ({read_error})"
+                f"the intended {app_name} window ({read_error})"
             )
 
-        actual = {"ui_text": actual_text, "app": _NOTEPAD_APP}
+        actual = {"ui_text": actual_text, "app": app_name}
         # Reuse the existing verifier predicate machinery: the observed window
         # text is compared with the framework's `contains` predicate rather than
         # a bespoke comparison.
         request = VerificationRequest(
             expected={"contains": expected_text},
             actual=actual,
-            metadata={**metadata, "app": _NOTEPAD_APP},
+            metadata={**metadata, "app": app_name},
         )
         try:
             result: VerificationResult = self.verifier.verify(request)
@@ -1431,8 +1630,8 @@ class Brain:
             if len(seen) > 200:
                 seen = seen[:200] + "…"
             return False, (
-                "verification failed: the text observed in the bound Notepad window was "
-                f"{seen!r}, which does not contain {expected_text!r}"
+                f"verification failed: the text observed in the bound {app_name} window "
+                f"was {seen!r}, which does not contain {expected_text!r}"
             )
         return False, f"verification inconclusive: {result.reason}"
 
@@ -1443,10 +1642,15 @@ class Brain:
             ui_predicate = expected.get(_UI_TEXT_PREDICATE_KEY)
             if isinstance(ui_predicate, dict):
                 text = str(ui_predicate.get("text") or "")
-                app = str(ui_predicate.get("app") or _NOTEPAD_APP)
+                app = str(
+                    ui_predicate.get("app_name")
+                    or step.metadata.get("app")
+                    or ui_predicate.get("app")
+                    or "the target"
+                )
                 return (
                     f"Verified: '{text}' is present in the {app} window "
-                    f"(read back after typing)."
+                    f"(observed after typing)."
                 )
         return f"Verified: {step.description}"
 
@@ -1473,10 +1677,13 @@ class Brain:
         "remember", "store_memory", "save_memory",
         "send_email", "reply_email", "send_message", "reply_message",
         "create_event", "modify_event", "cancel_event",
-        # Cross-app Notepad actions are real, externally visible interactions.
+        # Cross-app actions are real, externally visible interactions.
+        "launch_application", "open_application", "start_application",
+        "activate_application",
         "launch_notepad", "open_notepad", "start_notepad",
         "type_text", "type_text_in_notepad", "type_in_notepad",
         "type_into_notepad", "write_in_notepad", "enter_text",
+        "type_text_in_application", "write_in_application",
     })
 
     def _update_memory(
