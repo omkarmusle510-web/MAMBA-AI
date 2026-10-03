@@ -9,9 +9,13 @@ ZERO tool execution logic. All intelligence remains in Mamba Core.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import functools
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +23,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from core.cancellation import CancellationToken, reset_current_token, set_current_token
 from core.runtime import MambaRuntime
 from core.types import ExecutionResult, ResultStatus, UserRequest
 from voice.errors import VoiceError
@@ -28,6 +33,10 @@ log = logging.getLogger("mamba.transport")
 # Voice-turn audio limits: WAV-framed utterances only (16-bit PCM container
 # required — the STT provider cannot parse headerless raw PCM).
 _MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024
+
+# Sentinel the /live receiver enqueues when the socket closes, so the turn loop
+# can distinguish "client gone" from an ordinary inbound message.
+_DISCONNECT = object()
 
 
 def _looks_like_wav(data: bytes) -> bool:
@@ -75,10 +84,33 @@ def create_app(
     reminders_path: Path | None = None,
 ) -> FastAPI:
     """Create FastAPI transport adapter application around MambaRuntime."""
+
+    # A single dedicated worker serialises Brain.run off the event loop. One
+    # worker is deliberate: Mamba's Brain, browser session and SQLite memory
+    # store are single-execution state, so serialising preserves the existing
+    # de-facto behaviour while freeing the loop to serve health checks, sockets
+    # and cancellations concurrently.
+    worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mamba-worker")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            yield
+        finally:
+            # Application shutdown is separate from per-request cancellation:
+            # drop queued work without blocking, then let the runtime perform
+            # its own bounded teardown (stops MCP/browser, closes memory).
+            worker.shutdown(wait=False, cancel_futures=True)
+            try:
+                runtime.shutdown()
+            except Exception:
+                log.warning("runtime shutdown raised during teardown", exc_info=True)
+
     app = FastAPI(
         title="Mamba AI Transport Gateway",
         description="Lightweight HTTP/WebSocket transport adapter for Mamba Core.",
         version="1.0.0",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -104,7 +136,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="input must not be empty")
 
         user_req = UserRequest(goal=prompt, metadata=dict(req.metadata or {}))
-        result = runtime.run(user_req)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(worker, functools.partial(runtime.run, user_req))
         return _format_execution_response(result)
 
     @app.post("/api/voice")
@@ -121,8 +154,15 @@ def create_app(
             raise HTTPException(status_code=400, detail="Empty audio payload")
 
         mime_type = file.content_type or "audio/wav"
-        prompt, result = voice_interface.process_voice_input(
-            audio_bytes, mime_type=mime_type, speak_response=False
+        loop = asyncio.get_running_loop()
+        prompt, result = await loop.run_in_executor(
+            worker,
+            functools.partial(
+                voice_interface.process_voice_input,
+                audio_bytes,
+                mime_type=mime_type,
+                speak_response=False,
+            ),
         )
 
         response_data = _format_execution_response(result)
@@ -137,9 +177,91 @@ def create_app(
         await websocket.accept()
         await websocket.send_json({"type": "status", "status": "connected"})
 
+        loop = asyncio.get_running_loop()
+        inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+        async def _receiver() -> None:
+            """Sole reader of the socket, feeding inbound frames to ``inbox``.
+
+            Receiving on one dedicated task (never cancelled mid-frame) lets the
+            turn loop watch for a cancel message while a turn executes without
+            racing or dropping socket reads.
+            """
+            try:
+                while True:
+                    raw = await websocket.receive_text()
+                    await inbox.put(raw)
+            except WebSocketDisconnect:
+                await inbox.put(_DISCONNECT)
+            except Exception:
+                await inbox.put(_DISCONNECT)
+
+        recv_task = asyncio.create_task(_receiver())
+
+        def make_progress():
+            """Build a worker-thread-safe progress callback.
+
+            Milestones are emitted on the single worker thread; they are
+            marshalled back onto the event loop with ``run_coroutine_threadsafe``
+            and fire-and-forget so the worker never blocks on socket I/O.
+            """
+
+            def on_progress(milestone: str) -> None:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        websocket.send_json({"type": "progress", "milestone": milestone}),
+                        loop,
+                    )
+                except Exception:
+                    pass
+
+            return on_progress
+
+        async def _run_cancellable(fn: Any) -> Any:
+            """Offload ``fn(token)`` to the worker and await it, honouring cancel.
+
+            While the turn runs, inbound ``{"type": "cancel"}`` frames signal the
+            cooperative CancellationToken. Any other frame is put back on the
+            inbox untouched so the next turn is processed in order after this one.
+            A client disconnect cancels the turn and unwinds the handler.
+            """
+            token = CancellationToken()
+            exec_fut = loop.run_in_executor(worker, fn, token)
+            while not exec_fut.done():
+                get_fut = asyncio.ensure_future(inbox.get())
+                done, _ = await asyncio.wait(
+                    {exec_fut, get_fut}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if get_fut not in done:
+                    get_fut.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await get_fut
+                    continue
+                raw = get_fut.result()
+                if raw is _DISCONNECT:
+                    token.cancel()
+                    with suppress(Exception):
+                        await exec_fut
+                    raise WebSocketDisconnect(code=1000)
+                is_cancel = False
+                try:
+                    msg = json.loads(raw)
+                    is_cancel = isinstance(msg, dict) and msg.get("type") == "cancel"
+                except Exception:
+                    is_cancel = False
+                if is_cancel:
+                    token.cancel()
+                    await websocket.send_json({"type": "status", "status": "cancelling"})
+                else:
+                    await inbox.put(raw)
+                    break
+            return await exec_fut
+
         try:
             while True:
-                raw_msg = await websocket.receive_text()
+                raw_msg = await inbox.get()
+                if raw_msg is _DISCONNECT:
+                    raise WebSocketDisconnect(code=1000)
                 try:
                     data = json.loads(raw_msg)
                 except Exception:
@@ -149,18 +271,9 @@ def create_app(
                 if data.get("type") == "video":
                     continue
 
-                # Execute through canonical MambaRuntime with milestone updates
-                def on_progress_sync(milestone: str) -> None:
-                    try:
-                        # Non-blocking best effort send
-                        import asyncio
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            loop.create_task(
-                                websocket.send_json({"type": "progress", "milestone": milestone})
-                            )
-                    except Exception:
-                        pass
+                # A cancel with no turn in flight is a no-op.
+                if data.get("type") == "cancel":
+                    continue
 
                 # 2. Incoming text or voice-turn audio.
                 # Voice turns carry WAV-framed audio (NOT headerless raw PCM)
@@ -169,6 +282,7 @@ def create_app(
                 prompt_text: str | None = None
                 input_modality = "text"
                 result: ExecutionResult | None = None
+                audio_bytes: bytes | None = None
                 if data.get("type") == "text":
                     prompt_text = str(data.get("text", "")).strip()
                 elif data.get("type") == "audio" and data.get("audio"):
@@ -187,35 +301,56 @@ def create_app(
                     if not _looks_like_wav(audio_bytes):
                         await websocket.send_json({"type": "error", "error": "Audio must be WAV-framed (16-bit PCM)."})
                         continue
+
+                on_progress_sync = make_progress()
+
+                if input_modality == "voice":
+                    # Voice path: transcription + execution happen together off
+                    # the loop. The ambient token is bound on the worker so the
+                    # nested Brain.run observes cancellation.
+                    await websocket.send_json({"type": "status", "status": "thinking"})
+
+                    def _voice_turn(token: CancellationToken, _audio: bytes = audio_bytes, _prog=on_progress_sync):
+                        reset = set_current_token(token)
+                        try:
+                            return voice_interface.process_voice_input(
+                                _audio,
+                                mime_type="audio/wav",
+                                speak_response=False,
+                                on_progress=_prog,
+                            )
+                        finally:
+                            reset_current_token(reset)
+
                     try:
-                        prompt_text, result = voice_interface.process_voice_input(
-                            audio_bytes,
-                            mime_type="audio/wav",
-                            speak_response=False,
-                            on_progress=on_progress_sync,
-                        )
+                        prompt_text, result = await _run_cancellable(_voice_turn)
                     except VoiceError as exc:
                         await websocket.send_json({"type": "error", "error": f"Voice processing failed: {exc}"})
                         continue
                     if not prompt_text:
                         await websocket.send_json({"type": "error", "error": "No speech detected."})
                         continue
+                    await websocket.send_json({
+                        "type": "transcription",
+                        "role": "user",
+                        "text": prompt_text,
+                    })
+                else:
+                    if not prompt_text:
+                        continue
+                    # Send user transcription to UI
+                    await websocket.send_json({
+                        "type": "transcription",
+                        "role": "user",
+                        "text": prompt_text,
+                    })
+                    await websocket.send_json({"type": "status", "status": "thinking"})
 
-                if not prompt_text:
-                    continue
+                    def _text_turn(token: CancellationToken, _prompt: str = prompt_text, _prog=on_progress_sync):
+                        return runtime.run(_prompt, on_progress=_prog, cancel_token=token)
 
-                # Send user transcription to UI
-                await websocket.send_json({
-                    "type": "transcription",
-                    "role": "user",
-                    "text": prompt_text,
-                })
-                await websocket.send_json({"type": "status", "status": "thinking"})
+                    result = await _run_cancellable(_text_turn)
 
-                if result is None:
-                    # Text path: execute here. (Voice path already executed
-                    # inside process_voice_input, tagged input_modality="voice".)
-                    result = runtime.run(prompt_text, on_progress=on_progress_sync)
                 formatted = _format_execution_response(result)
 
                 # Voice turns: speak the outcome back over the socket as a
@@ -266,6 +401,10 @@ def create_app(
             log.info("Client disconnected from /live WebSocket.")
         except Exception as exc:
             log.warning("WebSocket error in /live transport: %s", exc)
+        finally:
+            recv_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await recv_task
 
     @app.get("/api/settings")
     async def get_settings() -> dict[str, Any]:

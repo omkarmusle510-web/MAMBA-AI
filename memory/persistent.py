@@ -7,7 +7,8 @@ import os
 import re
 import sqlite3
 import struct
-from dataclasses import dataclass, replace
+import threading
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,11 @@ class PersistentStore:
     store_name: str = "persistent"
     _db_path: str = _DEFAULT_DB_PATH
     _connection: sqlite3.Connection | None = None
+    # Serialises all access to the single shared SQLite connection. The
+    # connection is created with check_same_thread=False (it is built on the
+    # startup thread but used on the worker thread); this lock makes
+    # multi-statement transactions atomic across threads.
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __init__(
         self,
@@ -87,6 +93,7 @@ class PersistentStore:
         store_name: str = "persistent",
     ) -> None:
         self.store_name = store_name
+        self._lock = threading.RLock()
         resolved_path = str(db_path) if db_path is not None else os.environ.get("MAMBA_MEMORY_DB", _DEFAULT_DB_PATH)
 
         if resolved_path != ":memory:":
@@ -202,7 +209,7 @@ class PersistentStore:
 
         try:
             now = _utc_now()
-            with self._connection:
+            with self._lock, self._connection:
                 cursor = self._connection.execute(
                     "SELECT created_at, embedding FROM memories WHERE id = ?",
                     (entry.id,),
@@ -295,8 +302,9 @@ class PersistentStore:
 
             sql += " ORDER BY created_at, id"
 
-            cursor = self._connection.execute(sql, params)
-            rows = cursor.fetchall()
+            with self._lock:
+                cursor = self._connection.execute(sql, params)
+                rows = cursor.fetchall()
             entries = [self._row_to_entry(row) for row in rows]
             matches = [
                 entry
@@ -327,11 +335,12 @@ class PersistentStore:
         assert self._connection is not None
 
         try:
-            cursor = self._connection.execute(
-                "SELECT id, content, metadata, created_at, updated_at, memory_type, project, task, source, importance, status, superseded_by FROM memories WHERE id = ?",
-                (memory_id,),
-            )
-            row = cursor.fetchone()
+            with self._lock:
+                cursor = self._connection.execute(
+                    "SELECT id, content, metadata, created_at, updated_at, memory_type, project, task, source, importance, status, superseded_by FROM memories WHERE id = ?",
+                    (memory_id,),
+                )
+                row = cursor.fetchone()
             if row is None:
                 return None
 
@@ -364,7 +373,7 @@ class PersistentStore:
             )
 
             new_emb = kwargs.get("embedding", None)
-            with self._connection:
+            with self._lock, self._connection:
                 if new_emb is not None:
                     packed_emb = _pack_embedding(new_emb)
                     self._connection.execute(
@@ -430,7 +439,7 @@ class PersistentStore:
 
         try:
             now = _utc_now()
-            with self._connection:
+            with self._lock, self._connection:
                 if hard_delete:
                     cursor = self._connection.execute(
                         "DELETE FROM memories WHERE id = ?",
@@ -466,8 +475,9 @@ class PersistentStore:
             params.append(project.strip())
         sql += " ORDER BY created_at DESC"
 
-        cursor = self._connection.execute(sql, params)
-        rows = cursor.fetchall()
+        with self._lock:
+            cursor = self._connection.execute(sql, params)
+            rows = cursor.fetchall()
         entries = [self._row_to_entry(row) for row in rows]
 
         if not content_tokens:
@@ -491,7 +501,7 @@ class PersistentStore:
         assert self._connection is not None
         try:
             packed = _pack_embedding(embedding)
-            with self._connection:
+            with self._lock, self._connection:
                 cursor = self._connection.execute(
                     "UPDATE memories SET embedding = ? WHERE id = ?",
                     (packed, memory_id),
@@ -505,11 +515,12 @@ class PersistentStore:
         if not memory_id:
             return None
         assert self._connection is not None
-        cursor = self._connection.execute(
-            "SELECT embedding FROM memories WHERE id = ?",
-            (memory_id,),
-        )
-        row = cursor.fetchone()
+        with self._lock:
+            cursor = self._connection.execute(
+                "SELECT embedding FROM memories WHERE id = ?",
+                (memory_id,),
+            )
+            row = cursor.fetchone()
         if row and row[0] is not None:
             return _unpack_embedding(row[0])
         return None
@@ -535,12 +546,13 @@ class PersistentStore:
             sql += " AND memory_type = ?"
             params.append(memory_type)
 
-        cursor = self._connection.execute(sql, params)
         results: list[tuple[str, list[float]]] = []
-        for row in cursor.fetchall():
-            vec = _unpack_embedding(row[1])
-            if vec is not None:
-                results.append((row[0], vec))
+        with self._lock:
+            cursor = self._connection.execute(sql, params)
+            for row in cursor.fetchall():
+                vec = _unpack_embedding(row[1])
+                if vec is not None:
+                    results.append((row[0], vec))
         return results
 
     def _row_to_entry(self, row: tuple[Any, ...]) -> MemoryEntry:
@@ -596,12 +608,13 @@ class PersistentStore:
 
     def close(self) -> None:
         """Close the database connection."""
-        if self._connection is not None:
-            try:
-                self._connection.close()
-            except Exception:
-                pass
-            self._connection = None
+        with self._lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
 
     def __enter__(self) -> PersistentStore:
         return self

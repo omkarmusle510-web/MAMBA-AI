@@ -36,8 +36,26 @@ class MambaRuntime:
         request: str | UserRequest,
         *,
         on_progress: Callable[[str], None] | None = None,
+        cancel_token: Any = None,
     ) -> ExecutionResult:
-        """Execute a user request through the complete Mamba Core lifecycle."""
+        """Execute a user request through the complete Mamba Core lifecycle.
+
+        Both ``on_progress`` and ``cancel_token`` are optional. When neither is
+        supplied this delegates to ``Brain.run(request)`` exactly as before, so
+        existing callers and test doubles are unaffected.
+        """
+        kwargs: dict[str, Any] = {}
         if on_progress is not None:
-            return self.brain.run(request, on_progress=on_progress)
-        return self.brain.run(request)
+            kwargs["on_progress"] = on_progress
+        if cancel_token is not None:
+            kwargs["cancel_token"] = cancel_token
+        return self.brain.run(request, **kwargs)
+
+    def shutdown(self) -> None:
+        """Bounded application teardown (stops MCP/browser, closes memory).
+
+        Separate from per-request cancellation; safe to call once at shutdown.
+        """
+        shutdown = getattr(self.brain, "shutdown", None)
+        if callable(shutdown):
+            shutdown()

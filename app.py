@@ -179,6 +179,7 @@ def main() -> None:
             voice_app.voice_loop()
         except Exception as exc:
             print(f"Voice interface error: {exc}", file=sys.stderr)
+        runtime.shutdown()
         return
 
     # One-shot mode if arguments provided
@@ -186,6 +187,7 @@ def main() -> None:
         request_text = " ".join(sys.argv[1:]).strip()
         result = runtime.run(request_text, on_progress=_show_progress)
         _display_result(result)
+        runtime.shutdown()
         return
 
     # Interactive input loop
@@ -213,6 +215,8 @@ def main() -> None:
 
         result = runtime.run(user_input, on_progress=_show_progress)
         _display_result(result)
+
+    runtime.shutdown()
 
 
 if __name__ == "__main__":

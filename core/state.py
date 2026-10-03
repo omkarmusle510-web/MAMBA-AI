@@ -23,16 +23,20 @@ class ExecutionState(StrEnum):
     EXECUTING = "executing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-_TERMINAL_STATES = frozenset({ExecutionState.COMPLETED, ExecutionState.FAILED})
+_TERMINAL_STATES = frozenset(
+    {ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.CANCELLED}
+)
 
 _ALLOWED_TRANSITIONS: dict[ExecutionState, frozenset[ExecutionState]] = {
-    ExecutionState.PENDING: frozenset({ExecutionState.PLANNING, ExecutionState.FAILED}),
-    ExecutionState.PLANNING: frozenset({ExecutionState.EXECUTING, ExecutionState.FAILED}),
-    ExecutionState.EXECUTING: frozenset({ExecutionState.PLANNING, ExecutionState.COMPLETED, ExecutionState.FAILED}),
+    ExecutionState.PENDING: frozenset({ExecutionState.PLANNING, ExecutionState.FAILED, ExecutionState.CANCELLED}),
+    ExecutionState.PLANNING: frozenset({ExecutionState.EXECUTING, ExecutionState.FAILED, ExecutionState.CANCELLED}),
+    ExecutionState.EXECUTING: frozenset({ExecutionState.PLANNING, ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.CANCELLED}),
     ExecutionState.COMPLETED: frozenset(),
     ExecutionState.FAILED: frozenset(),
+    ExecutionState.CANCELLED: frozenset(),
 }
 
 
@@ -79,11 +83,18 @@ class ExecutionRecord:
         self.error = error
         self.transition_to(ExecutionState.FAILED)
 
+    def mark_cancelled(self, reason: str = "cancelled") -> None:
+        """Record a deterministic cancellation. Never maps to completed/success."""
+        self.error = reason
+        self.transition_to(ExecutionState.CANCELLED)
+
     def to_result(self, *, output: str | None = None) -> ExecutionResult:
         if self.state == ExecutionState.COMPLETED:
             status = ResultStatus.COMPLETED
         elif self.state == ExecutionState.FAILED:
             status = ResultStatus.FAILED
+        elif self.state == ExecutionState.CANCELLED:
+            status = ResultStatus.CANCELLED
         else:
             raise ValidationError(
                 f"cannot build result while execution is in state {self.state.value}"

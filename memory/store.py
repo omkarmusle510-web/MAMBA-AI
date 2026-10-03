@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -59,22 +60,26 @@ class InMemoryStore:
     store_name: str = "in_memory"
     _entries: dict[str, MemoryEntry] = field(default_factory=dict, repr=False, compare=False)
     _embeddings: dict[str, list[float]] = field(default_factory=dict, repr=False, compare=False)
+    # Serialises reads and writes so a worker-thread execution and any other
+    # accessor cannot observe a half-updated store.
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def store(self, entry: MemoryEntry, embedding: list[float] | None = None) -> MemoryEntry:
         try:
-            existing = self._entries.get(entry.id)
-            if existing is None:
-                stored = entry
-            else:
-                stored = replace(
-                    entry,
-                    created_at=existing.created_at,
-                    updated_at=_utc_now(),
-                )
-            self._entries[stored.id] = stored
-            if embedding is not None:
-                self._embeddings[stored.id] = list(embedding)
-            return stored
+            with self._lock:
+                existing = self._entries.get(entry.id)
+                if existing is None:
+                    stored = entry
+                else:
+                    stored = replace(
+                        entry,
+                        created_at=existing.created_at,
+                        updated_at=_utc_now(),
+                    )
+                self._entries[stored.id] = stored
+                if embedding is not None:
+                    self._embeddings[stored.id] = list(embedding)
+                return stored
         except ValueError as exc:
             raise InvalidMemoryRequestError(str(exc)) from exc
         except Exception as exc:
@@ -82,108 +87,111 @@ class InMemoryStore:
 
     def retrieve(self, query: MemoryQuery) -> MemoryResult:
         try:
-            candidates: list[MemoryEntry] = []
-            for entry in self._entries.values():
-                # Status filter
-                if query.status is not None:
-                    entry_status = entry.status.value if isinstance(entry.status, MemoryStatus) else str(entry.status)
-                    query_status = query.status.value if isinstance(query.status, MemoryStatus) else str(query.status)
-                    if entry_status != query_status:
+            with self._lock:
+                candidates: list[MemoryEntry] = []
+                for entry in self._entries.values():
+                    # Status filter
+                    if query.status is not None:
+                        entry_status = entry.status.value if isinstance(entry.status, MemoryStatus) else str(entry.status)
+                        query_status = query.status.value if isinstance(query.status, MemoryStatus) else str(query.status)
+                        if entry_status != query_status:
+                            continue
+
+                    # Project filter
+                    if query.project.strip() and entry.project != query.project.strip():
                         continue
 
-                # Project filter
-                if query.project.strip() and entry.project != query.project.strip():
-                    continue
-
-                # Task filter
-                if query.task.strip() and entry.task != query.task.strip():
-                    continue
-
-                # Memory type filter
-                if query.memory_type is not None:
-                    entry_type = entry.memory_type.value if isinstance(entry.memory_type, MemoryType) else str(entry.memory_type)
-                    query_type = query.memory_type.value if isinstance(query.memory_type, MemoryType) else str(query.memory_type)
-                    if entry_type != query_type:
+                    # Task filter
+                    if query.task.strip() and entry.task != query.task.strip():
                         continue
 
-                # Minimum importance
-                if query.importance_min > 0.0 and entry.importance < query.importance_min:
-                    continue
+                    # Memory type filter
+                    if query.memory_type is not None:
+                        entry_type = entry.memory_type.value if isinstance(entry.memory_type, MemoryType) else str(entry.memory_type)
+                        query_type = query.memory_type.value if isinstance(query.memory_type, MemoryType) else str(query.memory_type)
+                        if entry_type != query_type:
+                            continue
 
-                if self._matches(entry, query):
-                    candidates.append(entry)
+                    # Minimum importance
+                    if query.importance_min > 0.0 and entry.importance < query.importance_min:
+                        continue
 
-            candidates.sort(key=_sort_key)
-            limited = candidates[: query.limit]
-            return MemoryResult(
-                entries=tuple(limited),
-                metadata={
-                    "store": self.store_name,
-                    "matched": len(candidates),
-                    "returned": len(limited),
-                },
-            )
+                    if self._matches(entry, query):
+                        candidates.append(entry)
+
+                candidates.sort(key=_sort_key)
+                limited = candidates[: query.limit]
+                return MemoryResult(
+                    entries=tuple(limited),
+                    metadata={
+                        "store": self.store_name,
+                        "matched": len(candidates),
+                        "returned": len(limited),
+                    },
+                )
         except ValueError as exc:
             raise InvalidMemoryRequestError(str(exc)) from exc
         except Exception as exc:
             raise MemoryRetrievalError(str(exc)) from exc
 
     def update(self, memory_id: str, **kwargs: Any) -> MemoryEntry | None:
-        existing = self._entries.get(memory_id)
-        if existing is None:
-            return None
+        with self._lock:
+            existing = self._entries.get(memory_id)
+            if existing is None:
+                return None
 
-        now = _utc_now()
-        new_content = kwargs.get("content", existing.content)
-        new_metadata = dict(kwargs.get("metadata", existing.metadata))
-        new_type = kwargs.get("memory_type", existing.memory_type)
-        new_project = kwargs.get("project", existing.project)
-        new_task = kwargs.get("task", existing.task)
-        new_source = kwargs.get("source", existing.source)
-        new_importance = kwargs.get("importance", existing.importance)
-        new_status = kwargs.get("status", existing.status)
-        new_superseded_by = kwargs.get("superseded_by", existing.superseded_by)
+            now = _utc_now()
+            new_content = kwargs.get("content", existing.content)
+            new_metadata = dict(kwargs.get("metadata", existing.metadata))
+            new_type = kwargs.get("memory_type", existing.memory_type)
+            new_project = kwargs.get("project", existing.project)
+            new_task = kwargs.get("task", existing.task)
+            new_source = kwargs.get("source", existing.source)
+            new_importance = kwargs.get("importance", existing.importance)
+            new_status = kwargs.get("status", existing.status)
+            new_superseded_by = kwargs.get("superseded_by", existing.superseded_by)
 
-        updated_entry = MemoryEntry(
-            id=existing.id,
-            content=str(new_content),
-            metadata=new_metadata,
-            created_at=existing.created_at,
-            updated_at=now,
-            memory_type=new_type,
-            project=str(new_project),
-            task=str(new_task),
-            source=str(new_source),
-            importance=float(new_importance),
-            status=new_status,
-            superseded_by=str(new_superseded_by),
-        )
-        self._entries[memory_id] = updated_entry
+            updated_entry = MemoryEntry(
+                id=existing.id,
+                content=str(new_content),
+                metadata=new_metadata,
+                created_at=existing.created_at,
+                updated_at=now,
+                memory_type=new_type,
+                project=str(new_project),
+                task=str(new_task),
+                source=str(new_source),
+                importance=float(new_importance),
+                status=new_status,
+                superseded_by=str(new_superseded_by),
+            )
+            self._entries[memory_id] = updated_entry
 
-        if "embedding" in kwargs:
-            new_emb = kwargs["embedding"]
-            if new_emb is not None:
-                self._embeddings[memory_id] = list(new_emb)
-            elif memory_id in self._embeddings:
-                del self._embeddings[memory_id]
+            if "embedding" in kwargs:
+                new_emb = kwargs["embedding"]
+                if new_emb is not None:
+                    self._embeddings[memory_id] = list(new_emb)
+                elif memory_id in self._embeddings:
+                    del self._embeddings[memory_id]
 
-        return updated_entry
+            return updated_entry
 
     def delete(self, memory_id: str, *, hard_delete: bool = False) -> bool:
-        if memory_id not in self._entries:
-            return False
-        if hard_delete:
-            del self._entries[memory_id]
-            self._embeddings.pop(memory_id, None)
-        else:
-            existing = self._entries[memory_id]
-            self._entries[memory_id] = replace(
-                existing,
-                status=MemoryStatus.DELETED,
-                updated_at=_utc_now(),
-            )
-            self._embeddings.pop(memory_id, None)
-        return True
+        with self._lock:
+            if memory_id not in self._entries:
+                return False
+            if hard_delete:
+                del self._entries[memory_id]
+                self._embeddings.pop(memory_id, None)
+            else:
+                existing = self._entries[memory_id]
+                self._entries[memory_id] = replace(
+                    existing,
+                    status=MemoryStatus.DELETED,
+                    updated_at=_utc_now(),
+                )
+                self._embeddings.pop(memory_id, None)
+            return True
 
     def find_related(self, content: str, project: str = "", limit: int = 5) -> list[MemoryEntry]:
         content_tokens = [
@@ -195,27 +203,30 @@ class InMemoryStore:
 
         token_set = set(content_tokens)
         scored: list[tuple[int, MemoryEntry]] = []
-        for entry in self._entries.values():
-            if entry.status != MemoryStatus.ACTIVE:
-                continue
-            if project.strip() and entry.project != project.strip():
-                continue
-            entry_tokens = set(re.findall(r"\w+", entry.content.casefold()))
-            overlap = len(token_set & entry_tokens)
-            if overlap > 0 or not token_set:
-                scored.append((overlap, entry))
+        with self._lock:
+            for entry in self._entries.values():
+                if entry.status != MemoryStatus.ACTIVE:
+                    continue
+                if project.strip() and entry.project != project.strip():
+                    continue
+                entry_tokens = set(re.findall(r"\w+", entry.content.casefold()))
+                overlap = len(token_set & entry_tokens)
+                if overlap > 0 or not token_set:
+                    scored.append((overlap, entry))
 
         scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
         return [item[1] for item in scored[:limit]]
 
     def store_embedding(self, memory_id: str, embedding: list[float]) -> bool:
-        if memory_id not in self._entries or not embedding:
-            return False
-        self._embeddings[memory_id] = list(embedding)
-        return True
+        with self._lock:
+            if memory_id not in self._entries or not embedding:
+                return False
+            self._embeddings[memory_id] = list(embedding)
+            return True
 
     def get_embedding(self, memory_id: str) -> list[float] | None:
-        return self._embeddings.get(memory_id)
+        with self._lock:
+            return self._embeddings.get(memory_id)
 
     def get_all_embeddings(
         self,
@@ -224,20 +235,21 @@ class InMemoryStore:
         status: str | None = "active",
     ) -> list[tuple[str, list[float]]]:
         results: list[tuple[str, list[float]]] = []
-        for mid, emb in self._embeddings.items():
-            entry = self._entries.get(mid)
-            if entry is None:
-                continue
-            entry_status = entry.status.value if isinstance(entry.status, MemoryStatus) else str(entry.status)
-            if status and entry_status != status:
-                continue
-            if project and entry.project != project:
-                continue
-            if memory_type:
-                entry_type = entry.memory_type.value if isinstance(entry.memory_type, MemoryType) else str(entry.memory_type)
-                if entry_type != memory_type:
+        with self._lock:
+            for mid, emb in self._embeddings.items():
+                entry = self._entries.get(mid)
+                if entry is None:
                     continue
-            results.append((mid, list(emb)))
+                entry_status = entry.status.value if isinstance(entry.status, MemoryStatus) else str(entry.status)
+                if status and entry_status != status:
+                    continue
+                if project and entry.project != project:
+                    continue
+                if memory_type:
+                    entry_type = entry.memory_type.value if isinstance(entry.memory_type, MemoryType) else str(entry.memory_type)
+                    if entry_type != memory_type:
+                        continue
+                results.append((mid, list(emb)))
         return results
 
     def _matches(self, entry: MemoryEntry, query: MemoryQuery) -> bool:

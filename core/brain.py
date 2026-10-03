@@ -26,6 +26,12 @@ from .capabilities import (
     CapabilityStatus,
     default_capability_registry,
 )
+from .cancellation import (
+    MambaCancelledError,
+    raise_if_cancelled,
+    reset_current_token,
+    set_current_token,
+)
 from .context import ExecutionContext
 from .errors import CoreError
 from .protocols import Executor, Planner
@@ -548,6 +554,7 @@ class Brain:
         request: str | UserRequest,
         *,
         on_progress: Any = None,
+        cancel_token: Any = None,
     ) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle.
 
@@ -555,8 +562,21 @@ class Brain:
             request: User goal as string or UserRequest.
             on_progress: Optional callable(str) receiving lightweight
                 milestone updates (e.g. "Planning...", "Executing...").
+            cancel_token: Optional cooperative CancellationToken. When supplied
+                it is bound as the ambient token for this execution so the loop
+                and interruptible collaborators (e.g. the MCP stdio client) can
+                honour cancellation. Omitting it preserves prior behaviour.
         """
         _progress = on_progress if callable(on_progress) else None
+        _reset = set_current_token(cancel_token) if cancel_token is not None else None
+        try:
+            return self._run(request, _progress)
+        finally:
+            if _reset is not None:
+                reset_current_token(_reset)
+
+    def _run(self, request: str | UserRequest, _progress: Any) -> ExecutionResult:
+        """Body of :meth:`run`; the ambient cancel token is already bound."""
 
         # ── 1. Request Intake ──
         user_request = self._intake(request)
@@ -600,7 +620,7 @@ class Brain:
                 self._pending_approval = None
                 pending.step.metadata["path"] = new_name
                 pending.step.description = re.sub(r'(\b\S+\.[a-zA-Z0-9]+\b)', new_name, pending.step.description)
-                res = self._resume_pending_approval(pending, user_request)
+                res = self._resume_pending_approval(pending, user_request, on_progress=_progress)
                 self._record_turn_context(user_request, res)
                 return res
             elif self._last_turn_context:
@@ -659,7 +679,7 @@ class Brain:
             else:
                 pending = self._pending_approval
                 self._pending_approval = None
-                res = self._resume_pending_approval(pending, user_request)
+                res = self._resume_pending_approval(pending, user_request, on_progress=_progress)
                 self._record_turn_context(user_request, res)
                 return res
 
@@ -710,15 +730,87 @@ class Brain:
             return context.record.to_result()
 
         # ── 4. Observation-Driven Execution Loop ──
-        res = self._execution_loop(context, user_request, on_progress=_progress)
+        try:
+            res = self._execution_loop(context, user_request, on_progress=_progress)
+        except MambaCancelledError:
+            res = self._cancel_result(context, _progress)
+        else:
+            if _progress and res.status == ResultStatus.COMPLETED:
+                _progress("Completed")
         self._record_turn_context(user_request, res)
         return res
+
+    def _cancel_result(
+        self, context: ExecutionContext, progress: Any,
+    ) -> ExecutionResult:
+        """Finalize a cancelled execution deterministically.
+
+        A cancelled run is recorded as CANCELLED and can never be reported as
+        completed/success. If the record already reached a terminal state the
+        existing outcome is preserved rather than overwritten.
+        """
+        if context.record.state not in (
+            ExecutionState.COMPLETED,
+            ExecutionState.FAILED,
+            ExecutionState.CANCELLED,
+        ):
+            context.record.mark_cancelled()
+        if progress:
+            progress("Cancelled")
+        return context.record.to_result(output="Cancelled")
 
     def route_model(self, request: ModelRequest) -> ModelProvider | None:
         """Route a model request through the model router if configured."""
         if self.model_router is not None:
             return self.model_router.route(request)
         return None
+
+    def shutdown(self) -> None:
+        """Bounded, best-effort teardown of resources this Brain owns.
+
+        Application shutdown is deliberately separate from per-request
+        cancellation: this never touches a CancellationToken. It stops any
+        browser provider (which terminates the MCP subprocess tree so no
+        orphaned process survives) and closes the persistent memory store.
+        Every step is independently guarded so teardown can neither hang nor
+        raise.
+        """
+        handlers: list[Any] = []
+        single = getattr(self.executor, "handler", None)
+        if single is not None:
+            handlers.append(single)
+        mapping = getattr(self.executor, "handlers", None)
+        if mapping:
+            try:
+                handlers.extend(mapping.values())
+            except Exception:
+                pass
+
+        seen: set[int] = set()
+        for handler in handlers:
+            try:
+                session = handler.browser_session
+            except Exception:
+                continue
+            if session is None or id(session) in seen:
+                continue
+            seen.add(id(session))
+            try:
+                session.stop()
+            except Exception:
+                pass
+
+        closed_stores: set[int] = set()
+        for store in (self.memory, self._memory_manager):
+            if store is None or id(store) in closed_stores:
+                continue
+            close = getattr(store, "close", None)
+            if callable(close):
+                closed_stores.add(id(store))
+                try:
+                    close()
+                except Exception:
+                    pass
 
     # ── Private Implementation ──
 
@@ -981,6 +1073,9 @@ class Brain:
         while cycles_used < self.max_cycles:
             cycles_used += 1
 
+            # Cancellation is cooperative and checked at each safe boundary.
+            raise_if_cancelled()
+
             # ── Reason / Plan ──
             if on_progress:
                 on_progress("Planning...")
@@ -1014,7 +1109,7 @@ class Brain:
             # ── Execute plan steps ──
             if on_progress:
                 on_progress("Executing...")
-            outcome = self._execute_plan(context, effective_plan, user_request, completed_signatures)
+            outcome = self._execute_plan(context, effective_plan, user_request, completed_signatures, on_progress=on_progress)
 
             if outcome == _StepOutcome.AWAITING_APPROVAL:
                 reason = (
@@ -1084,6 +1179,8 @@ class Brain:
             context.attach_plan(plan)
             context.transition_to(ExecutionState.EXECUTING)
             return plan
+        except MambaCancelledError:
+            raise
         except CoreError as exc:
             context.mark_failed(str(exc))
             return None
@@ -1097,6 +1194,7 @@ class Brain:
         plan: ExecutionPlan,
         user_request: UserRequest,
         completed_signatures: set[tuple[str, str, str]] | None = None,
+        on_progress: Any = None,
     ) -> str:
         """Execute steps from a plan, evaluating each observation.
 
@@ -1112,7 +1210,7 @@ class Brain:
         Returns the overall outcome: FINISHED, REPLAN, FAILED, or AWAITING_APPROVAL.
         """
         for idx, step in enumerate(plan.steps):
-            outcome, info = self._execute_step(context, step)
+            outcome, info = self._execute_step(context, step, on_progress=on_progress)
             if outcome == _StepOutcome.FINISHED:
                 if completed_signatures is not None:
                     completed_signatures.add(_step_signature(step))
@@ -1147,12 +1245,16 @@ class Brain:
         return _StepOutcome.FINISHED
 
     def _execute_step(
-        self, context: ExecutionContext, step: PlanStep,
+        self, context: ExecutionContext, step: PlanStep, *, on_progress: Any = None,
     ) -> tuple[str, str]:
         """Execute a single step through the full permission → execute → observe → verify pipeline.
 
         Returns (outcome, info) where outcome is FINISHED, REPLAN, FAILED, or AWAITING_APPROVAL.
         """
+        # Never begin a step (especially a destructive or externally visible one)
+        # once cancellation has been requested.
+        raise_if_cancelled()
+
         # ── Capability Availability Check ──
         if self.capabilities is not None:
             cap = self.capabilities.find_capability_for_action(step.intent)
@@ -1239,6 +1341,9 @@ class Brain:
         try:
             observation = self.executor.execute(step, context)
             context.add_observation(observation)
+        except MambaCancelledError:
+            # Cancellation must unwind, not be recorded as a step failure.
+            raise
         except CoreError as exc:
             obs = Observation(step_id=step.id, content=str(exc), success=False)
             context.add_observation(obs)
@@ -1249,6 +1354,12 @@ class Brain:
             context.add_observation(obs)
             context.mark_failed(f"execution error: {exc}")
             return _StepOutcome.FAILED, str(exc)
+
+        # Honour a cancellation that arrived while the step ran (e.g. an
+        # interrupted MCP call) BEFORE interpreting the observation, so a
+        # cancelled step is recorded as CANCELLED rather than triggering a
+        # replan or being marked failed.
+        raise_if_cancelled()
 
         # ── Evaluate Observation ──
         if not observation.success:
@@ -1266,6 +1377,8 @@ class Brain:
 
         # ── Verification ──
         if self.verifier is not None and self._needs_verification(step, observation):
+            if on_progress:
+                on_progress("Verifying...")
             verified, reason = self._verify(step, observation)
             if verified:
                 # Surface the verified outcome explicitly, so the difference
@@ -1798,6 +1911,8 @@ class Brain:
         self,
         pending: PendingApproval,
         approval_request: UserRequest,
+        *,
+        on_progress: Any = None,
     ) -> ExecutionResult:
         """Resume execution of a paused step after user approval."""
         # Record the approval against this exact step. Approval does not carry
@@ -1818,41 +1933,49 @@ class Brain:
                 continue
             context.add_observation(obs)
 
-        outcome, info = self._execute_step(context, pending.step)
-        if outcome == _StepOutcome.FAILED:
-            return context.record.to_result()
+        if on_progress:
+            on_progress("Executing...")
 
-        remaining_steps = pending.plan.steps[pending.step_index + 1:]
-        for rem_step in remaining_steps:
-            outcome, rem_info = self._execute_step(context, rem_step)
-            if outcome == _StepOutcome.AWAITING_APPROVAL:
-                self._pending_approval = PendingApproval(
-                    step=rem_step,
-                    context=context,
-                    plan=pending.plan,
-                    step_index=pending.plan.steps.index(rem_step),
-                    user_request=pending.user_request,
-                    reason=rem_info,
-                )
-                prompt_msg = f"Action requires user confirmation: {rem_info}. Do you want to proceed?"
-                obs = Observation(
-                    step_id=rem_step.id,
-                    content=prompt_msg,
-                    success=False,
-                    metadata={"permission_decision": "ask", "awaiting_approval": True},
-                )
-                context.add_observation(obs)
-                context.mark_failed(prompt_msg)
-                return context.record.to_result(output=prompt_msg)
+        try:
+            outcome, info = self._execute_step(context, pending.step, on_progress=on_progress)
             if outcome == _StepOutcome.FAILED:
                 return context.record.to_result()
 
-        if outcome == _StepOutcome.REPLAN or _plan_needs_replanning(pending.plan):
-            return self._execution_loop(context, pending.user_request)
+            remaining_steps = pending.plan.steps[pending.step_index + 1:]
+            for rem_step in remaining_steps:
+                outcome, rem_info = self._execute_step(context, rem_step, on_progress=on_progress)
+                if outcome == _StepOutcome.AWAITING_APPROVAL:
+                    self._pending_approval = PendingApproval(
+                        step=rem_step,
+                        context=context,
+                        plan=pending.plan,
+                        step_index=pending.plan.steps.index(rem_step),
+                        user_request=pending.user_request,
+                        reason=rem_info,
+                    )
+                    prompt_msg = f"Action requires user confirmation: {rem_info}. Do you want to proceed?"
+                    obs = Observation(
+                        step_id=rem_step.id,
+                        content=prompt_msg,
+                        success=False,
+                        metadata={"permission_decision": "ask", "awaiting_approval": True},
+                    )
+                    context.add_observation(obs)
+                    context.mark_failed(prompt_msg)
+                    return context.record.to_result(output=prompt_msg)
+                if outcome == _StepOutcome.FAILED:
+                    return context.record.to_result()
 
-        self._update_memory(context, pending.user_request)
-        context.transition_to(ExecutionState.COMPLETED)
-        return context.record.to_result(output=_last_observation_content(context))
+            if outcome == _StepOutcome.REPLAN or _plan_needs_replanning(pending.plan):
+                return self._execution_loop(context, pending.user_request, on_progress=on_progress)
+
+            self._update_memory(context, pending.user_request)
+            context.transition_to(ExecutionState.COMPLETED)
+            if on_progress:
+                on_progress("Completed")
+            return context.record.to_result(output=_last_observation_content(context))
+        except MambaCancelledError:
+            return self._cancel_result(context, on_progress)
 
     def _needs_verification(
         self, step: PlanStep, observation: Observation,

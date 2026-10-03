@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -67,30 +68,39 @@ class SentenceTransformerEmbeddingProvider:
         self._load_attempted = False
         self._available = False
         self._error: str | None = None
+        # Guards the one-time model load so concurrent callers (event-loop and
+        # worker threads) cannot double-load the weights.
+        self._load_lock = threading.Lock()
 
     def _ensure_loaded(self) -> bool:
         if self._load_attempted:
             return self._available
 
-        self._load_attempted = True
-        try:
-            from sentence_transformers import SentenceTransformer
+        with self._load_lock:
+            # Double-check: another thread may have finished the load while we
+            # waited for the lock.
+            if self._load_attempted:
+                return self._available
 
-            self._model = SentenceTransformer(self.model_name)
-            # Infer dimension
-            test_emb = self._model.encode(["test"])
-            self._dimension = len(test_emb[0])
-            self._available = True
-            self._error = None
-            logger.info("Loaded SentenceTransformer model '%s' (dim: %d)", self.model_name, self._dimension)
-        except Exception as exc:
-            self._available = False
-            self._error = str(exc)
-            logger.warning(
-                "SentenceTransformer model '%s' unavailable, semantic retrieval will fall back to keyword: %s",
-                self.model_name,
-                exc,
-            )
+            self._load_attempted = True
+            try:
+                from sentence_transformers import SentenceTransformer
+
+                self._model = SentenceTransformer(self.model_name)
+                # Infer dimension
+                test_emb = self._model.encode(["test"])
+                self._dimension = len(test_emb[0])
+                self._available = True
+                self._error = None
+                logger.info("Loaded SentenceTransformer model '%s' (dim: %d)", self.model_name, self._dimension)
+            except Exception as exc:
+                self._available = False
+                self._error = str(exc)
+                logger.warning(
+                    "SentenceTransformer model '%s' unavailable, semantic retrieval will fall back to keyword: %s",
+                    self.model_name,
+                    exc,
+                )
 
         return self._available
 

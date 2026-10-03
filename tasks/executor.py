@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from core.cancellation import MambaCancelledError
 from core.context import ExecutionContext
 from core.types import Observation, PlanStep
 
@@ -49,6 +50,10 @@ class TaskExecutor:
 
         try:
             output = handler.run(task_input, context)
+        except MambaCancelledError:
+            # Cancellation propagates to the runtime boundary; it is never
+            # reclassified here as an ordinary task failure.
+            raise
         except TaskError as exc:
             task.fail(str(exc))
             return Observation(step_id=task_input.step_id, content=str(exc), success=False)

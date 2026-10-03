@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -66,6 +67,10 @@ def extract_page(text: str) -> tuple[str, str, str]:
     return url, title, snapshot
 
 
+# Sentinel pushed onto a request's queue when the connection closes while it waits.
+_CLOSED = object()
+
+
 class McpStdioClient:
     """Minimal, synchronous MCP client over a child process' stdio."""
 
@@ -80,15 +85,25 @@ class McpStdioClient:
         self._timeout = timeout
         self._env = env
         self._process: subprocess.Popen[str] | None = None
-        self._lock = threading.RLock()
+        # Lifecycle lock guards start()/stop() and the process handle. It is
+        # never held while awaiting a response, so a hung request can always be
+        # stopped and shutdown stays bounded.
+        self._proc_lock = threading.RLock()
+        # Serialises writes to the child's stdin (single writer).
+        self._write_lock = threading.Lock()
+        # Guards the request-id -> response-queue map and the id counter.
+        self._pending_lock = threading.Lock()
+        self._pending: dict[int, queue.Queue[object]] = {}
         self._counter = 0
         self._stderr_lines: list[str] = []
         self._initialized = False
+        self._closed = threading.Event()
+        self._reader_thread: threading.Thread | None = None
 
     # ── lifecycle ──
 
     def start(self) -> None:
-        with self._lock:
+        with self._proc_lock:
             if self._process is not None and self._process.poll() is None:
                 return
             env = dict(os.environ)
@@ -117,7 +132,14 @@ class McpStdioClient:
                 ) from exc
 
             self._stderr_lines = []
+            with self._pending_lock:
+                self._pending = {}
+            self._closed.clear()
             threading.Thread(target=self._drain_stderr, daemon=True).start()
+            self._reader_thread = threading.Thread(
+                target=self._read_loop, daemon=True, name="mcp-stdout-reader"
+            )
+            self._reader_thread.start()
             self._initialize()
 
     def _drain_stderr(self) -> None:
@@ -133,8 +155,80 @@ class McpStdioClient:
         except Exception:
             pass
 
+    def _read_loop(self) -> None:
+        """Continuously read stdout, dispatching responses by id.
+
+        Runs on a dedicated daemon thread so no request path blocks on
+        ``readline``. On EOF (process exit) it wakes every pending request so
+        they fail promptly instead of waiting out their timeout.
+        """
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        try:
+            for line in process.stdout:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    message = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                self._dispatch(message)
+        except Exception:
+            pass
+        finally:
+            self._wake_pending()
+
+    def _dispatch(self, message: dict[str, Any]) -> None:
+        """Route a parsed JSON-RPC message to its waiting request, if any.
+
+        Messages whose id has no pending request (notifications, or responses
+        that arrive after a request timed out/cancelled) are dropped so a late
+        reply can never be delivered to a subsequent request.
+        """
+        message_id = message.get("id")
+        if not isinstance(message_id, int):
+            return
+        with self._pending_lock:
+            response_queue = self._pending.get(message_id)
+        if response_queue is None:
+            return
+        try:
+            response_queue.put_nowait(message)
+        except queue.Full:
+            pass
+
+    def _wake_pending(self) -> None:
+        """Unblock every pending request (the connection is going away)."""
+        with self._pending_lock:
+            waiters = list(self._pending.values())
+            self._pending = {}
+        for response_queue in waiters:
+            try:
+                response_queue.put_nowait(_CLOSED)
+            except queue.Full:
+                pass
+
+    def _ambient_cancel_event(self) -> threading.Event | None:
+        """Cancellation event for the in-flight request, if one is bound.
+
+        Imported lazily so the tools layer does not take a hard dependency on
+        core at import time (keeps the CORE-above-TOOLS layering intact).
+        """
+        try:
+            from core.cancellation import current_cancel_event
+        except Exception:
+            return None
+        try:
+            return current_cancel_event()
+        except Exception:
+            return None
+
     def stop(self) -> None:
-        with self._lock:
+        with self._proc_lock:
+            self._closed.set()
+            self._wake_pending()
             process = self._process
             self._process = None
             self._initialized = False
@@ -145,14 +239,65 @@ class McpStdioClient:
                     process.stdin.close()
             except Exception:
                 pass
+            self._terminate_tree(process)
+
+    def _terminate_tree(self, process: subprocess.Popen[str]) -> None:
+        """Terminate the child and, on Windows, its whole process tree.
+
+        ``npx`` spawns ``node`` as a grandchild; terminating only the direct
+        child leaks the browser server. psutil lets us reach the descendants.
+        Every step is bounded so shutdown can never hang.
+        """
+        children: list[Any] = []
+        try:
+            import psutil
+
+            parent = psutil.Process(process.pid)
+            children = parent.children(recursive=True)
+        except Exception:
+            children = []
+
+        for child in children:
             try:
-                process.terminate()
-                process.wait(timeout=10)
+                child.terminate()
             except Exception:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
+                pass
+        if children:
+            try:
+                import psutil
+
+                _, alive = psutil.wait_procs(children, timeout=5)
+                for child in alive:
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=5)
+            return
+        except Exception:
+            pass
+        try:
+            process.kill()
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                pass
 
     @property
     def running(self) -> bool:
@@ -183,30 +328,64 @@ class McpStdioClient:
         self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
     def _write(self, message: dict[str, Any]) -> None:
-        process = self._process
-        if process is None or process.stdin is None or process.poll() is not None:
-            raise BrowserTargetError("the browser provider process is not running")
-        try:
-            process.stdin.write(json.dumps(message) + "\n")
-            process.stdin.flush()
-        except Exception as exc:
-            raise BrowserTargetError(
-                f"lost the browser provider connection: {exc}"
-            ) from exc
-
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        with self._lock:
+        with self._write_lock:
             process = self._process
-            if process is None or process.stdout is None:
+            if process is None or process.stdin is None or process.poll() is not None:
                 raise BrowserTargetError("the browser provider process is not running")
+            try:
+                process.stdin.write(json.dumps(message) + "\n")
+                process.stdin.flush()
+            except Exception as exc:
+                raise BrowserTargetError(
+                    f"lost the browser provider connection: {exc}"
+                ) from exc
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Send a request and wait for its matching response, bounded and cancellable.
+
+        The wait never holds the lifecycle lock, so ``stop()`` can always make
+        progress. The wait ends on: the matching response, the timeout, ambient
+        cancellation, connection close, or unexpected process exit. A per-request
+        queue keyed by the request id means a late response to a timed-out or
+        cancelled request is dropped rather than corrupting a later one.
+        """
+        process = self._process
+        if process is None:
+            raise BrowserTargetError("the browser provider process is not running")
+
+        limit = self._timeout if timeout is None else timeout
+        cancel_event = self._ambient_cancel_event()
+
+        with self._pending_lock:
             self._counter += 1
             request_id = self._counter
+            response_queue: queue.Queue[object] = queue.Queue(maxsize=1)
+            self._pending[request_id] = response_queue
+
+        try:
             self._write(
                 {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
             )
 
-            deadline = time.monotonic() + self._timeout
-            while time.monotonic() < deadline:
+            deadline = time.monotonic() + limit
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BrowserTargetError(
+                        f"the browser provider did not answer '{method}' within {limit:.0f}s"
+                    )
+                if cancel_event is not None and cancel_event.is_set():
+                    raise BrowserTargetError(f"cancelled while awaiting '{method}'")
+                if self._closed.is_set():
+                    raise BrowserTargetError(
+                        f"the browser provider connection closed while awaiting '{method}'"
+                    )
                 if process.poll() is not None:
                     detail = self.recent_stderr()
                     raise BrowserTargetError(
@@ -214,28 +393,17 @@ class McpStdioClient:
                         + (f": {detail}" if detail else "")
                     )
                 try:
-                    line = process.stdout.readline()
-                except Exception as exc:
+                    item = response_queue.get(timeout=min(remaining, 0.1))
+                except queue.Empty:
+                    continue
+                if item is _CLOSED:
                     raise BrowserTargetError(
-                        f"could not read from the browser provider: {exc}"
-                    ) from exc
-                if not line:
-                    time.sleep(0.02)
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if message.get("id") != request_id:
-                    # Notifications / unrelated responses are ignored.
-                    continue
-                return message
-            raise BrowserTargetError(
-                f"the browser provider did not answer '{method}' within {self._timeout:.0f}s"
-            )
+                        f"the browser provider connection closed while awaiting '{method}'"
+                    )
+                return item  # type: ignore[return-value]
+        finally:
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
         """Invoke an MCP tool. Returns (text, is_error)."""
