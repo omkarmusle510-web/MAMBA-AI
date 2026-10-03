@@ -9,6 +9,7 @@ into the existing ExecutionPlan contract.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -19,6 +20,8 @@ from models.protocols import ModelRouter
 from models.types import ModelRequest
 
 from .errors import AgentPlanningError, AgentReasoningError
+
+log = logging.getLogger("mamba.planning")
 from .types import Agent, AgentInput, AgentOutput
 
 _SYSTEM_PROMPT = """\
@@ -189,6 +192,86 @@ def _parse_plan_json(content: str) -> dict[str, Any]:
     return parsed
 
 
+_UNTRUSTED_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        # Approval authority — only a real user confirmation can grant this.
+        "approved",
+        "approve",
+        "auto_approve",
+        "approved_by",
+        "confirmed",
+        "confirm",
+        "authorize",
+        "authorized",
+        "authorization",
+        "permission",
+        "permitted",
+        "allow",
+        "allowed",
+        "deny",
+        "denied",
+        "bypass",
+        "bypass_permissions",
+        "skip_permission",
+        "requires_approval",
+        "requires_confirmation",
+        # Risk classification — derived from the capability table, never claimed.
+        "risk",
+        "risk_level",
+        "severity",
+        # Sensitivity flags — set by authoritative capability metadata.
+        "destructive",
+        "irreversible",
+        "user_sensitive",
+        "externally_visible",
+        # Verification verdicts — produced by the verification stage.
+        "verified",
+        "outcome_verified",
+        "verification_passed",
+        "verification_skipped",
+        "skip_verification",
+        "insufficient_evidence",
+    }
+)
+"""Metadata keys a planner must never supply.
+
+The planner describes what it wants to do; Mamba decides whether it may do it.
+Every key here is an *authority* field: Mamba reads it to loosen a permission,
+risk, or verification decision. A model that can emit them can authorize its own
+actions, so they are dropped at the only boundary all plan output crosses.
+
+Deliberately NOT here: ``expected``/``verify`` (the planner legitimately requests
+that an outcome be checked), escalation-only flags such as ``consequential``
+(the browser tool can raise risk from them but never lower it), and routing keys
+such as ``action``/``capability_id`` (resolved against fixed capability tables,
+which remain authoritative).
+"""
+
+
+def _sanitize_step_metadata(
+    index: int, intent: str, metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """Drop planner-supplied security-authority keys from step metadata."""
+    rejected = [
+        key
+        for key in metadata
+        if isinstance(key, str) and key.lower() in _UNTRUSTED_METADATA_KEYS
+    ]
+    if not rejected:
+        return metadata
+    log.warning(
+        "step %d (%s): ignored planner-supplied security field(s): %s",
+        index,
+        intent,
+        ", ".join(sorted(rejected)),
+    )
+    return {
+        key: value
+        for key, value in metadata.items()
+        if not (isinstance(key, str) and key.lower() in _UNTRUSTED_METADATA_KEYS)
+    }
+
+
 def _validate_and_build_plan(raw: dict[str, Any]) -> ExecutionPlan:
     """Validate raw parsed JSON and build an ExecutionPlan."""
     # Validate steps field.
@@ -229,6 +312,8 @@ def _validate_and_build_plan(raw: dict[str, Any]) -> ExecutionPlan:
                 f"step {i} 'metadata' must be an object, "
                 f"got {type(metadata).__name__}"
             )
+
+        metadata = _sanitize_step_metadata(i, intent.strip(), metadata)
 
         plan_steps.append(PlanStep(
             description=description.strip(),
