@@ -49,6 +49,7 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
   const [panelHeight, setPanelHeight] = useState(600);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
 
@@ -78,9 +79,9 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
 
   // Smooth scroll to new entry
   useEffect(() => {
-    const container = containerRef.current;
-    if (container && initialEntries.length > entries.length) {
-      container.scrollTop = container.scrollHeight;
+    const list = listRef.current;
+    if (list && initialEntries.length > entries.length) {
+      list.scrollTop = list.scrollHeight;
     }
   }, [entries, initialEntries.length]);
 
@@ -162,17 +163,18 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: 32 }}
         transition={{ type: "spring", stiffness: 300, damping: 30 }}
-        className="fixed top-20 bottom-20 right-4 z-40 flex flex-col bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-3xl shadow-[0_0_80px_rgba(168,85,247,0.15)] overflow-hidden select-none"
-        style={{
-          width: isMinimized ? "auto" : `${panelWidth}px`,
-          height: isMinimized ? "auto" : `${panelHeight}px`,
-        }}
+        className={`transcript-panel${isMinimized ? " is-minimized" : ""}`}
+        style={
+          isMinimized
+            ? undefined
+            : { width: `${panelWidth}px`, height: `${panelHeight}px` }
+        }
       >
         {/* Resizer handle */}
         {!isMinimized && (
           <div
             ref={resizeRef}
-            className="absolute left-0 top-0 bottom-0 w-2 bg-gradient-to-b from-transparent via-purple-500/30 to-transparent cursor-col-resize z-50 hover:bg-purple-500/50 transition-colors"
+            className="transcript-resizer"
             onMouseDown={(e) => {
               e.preventDefault();
               setIsResizing(true);
@@ -181,82 +183,76 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
         )}
 
         {/* Header bar */}
-        <div className="relative z-10 p-5 border-b border-white/5 bg-slate-950/70 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <MessageSquare className="w-5 h-5 text-purple-400" />
-            <h3 className="text-base font-bold font-mono text-slate-200 tracking-wider uppercase">
-              Conversation Transcript
-              <span className="ml-2 text-xs font-sans font-normal text-slate-500">
-                ({entries.length} entries)
-              </span>
-            </h3>
+        <div className="panel-header">
+          <h3 className="panel-title">
+            <MessageSquare />
+            Conversation Transcript
+            <span className="count">({entries.length} entries)</span>
             {activeFilter !== "all" && (
-              <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold uppercase tracking-wider border border-indigo-500/30">
-                {activeFilter}
-              </span>
+              <span className="t-role model">{activeFilter}</span>
             )}
-          </div>
+          </h3>
 
-          <div className="flex items-center gap-2">
-            {/* Controls */}
+          <div className="panel-actions">
             <button
               onClick={() =>
                 setActiveFilter(
                   activeFilter === "all" ? "user" : activeFilter === "user" ? "model" : "all"
                 )
               }
-              className="p-2 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-white/5 text-slate-400 hover:text-indigo-300 transition"
+              className="icon-btn"
               title="Toggle filter"
+              aria-label="Toggle filter"
             >
-              <Filter className="w-4 h-4" />
+              <Filter />
             </button>
             <button
               onClick={clearAll}
-              className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/20 border border-white/5 text-slate-400 hover:text-rose-300 transition"
+              className="icon-btn"
               title="Clear transcript"
+              aria-label="Clear transcript"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 />
             </button>
             <button
               onClick={() => setIsMinimized(!isMinimized)}
-              className="p-2 rounded-xl bg-white/5 hover:bg-slate-600/20 border border-white/5 text-slate-400 hover:text-slate-200 transition"
+              className="icon-btn"
               title="Minimize"
+              aria-label="Minimize"
             >
-              {isMinimized ? (
-                <Maximize2 className="w-4 h-4" />
-              ) : (
-                <Minimize2 className="w-4 h-4" />
-              )}
+              {isMinimized ? <Maximize2 /> : <Minimize2 />}
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/20 border border-white/5 text-slate-400 hover:text-rose-300 transition"
+              className="icon-btn"
               title="Close (Esc)"
+              aria-label="Close transcript"
             >
-              <X className="w-4 h-4" />
+              <X />
             </button>
           </div>
         </div>
 
         {/* Search bar */}
         {!isMinimized && (
-          <div className="p-4 border-b border-white/5 bg-slate-950/40">
-            <div className="relative">
-              <Search className="absolute left-3.5 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <div className="transcript-search">
+            <div className="search-field">
+              <Search />
               <input
                 data-transcript-search
                 type="text"
                 placeholder="Search transcript..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950/80 border border-white/10 text-slate-200 text-xs font-mono placeholder-slate-600 focus:outline-none focus:border-purple-500/40 focus:ring-1 focus:ring-purple-500/40 transition"
+                aria-label="Search transcript"
               />
               {searchTerm && (
                 <button
                   onClick={() => setSearchTerm("")}
-                  className="absolute right-3.5 top-1/2 transform -translate-y-1/2 text-slate-500 hover:text-slate-200"
+                  className="search-clear"
+                  aria-label="Clear search"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X />
                 </button>
               )}
             </div>
@@ -265,20 +261,16 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
 
         {/* Content area */}
         {!isMinimized && (
-          <div className="flex-1 overflow-y-auto p-4 space-y-3.5 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-700/50 hover:scrollbar-thumb-slate-600/70">
+          <div className="transcript-list" ref={listRef}>
             {filteredEntries.length === 0 ? (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="text-center py-12 space-y-4"
+                className="transcript-empty"
               >
-                <MessageSquare className="w-10 h-10 text-slate-600 mx-auto" />
-                <div className="text-slate-400 font-mono text-sm">
-                  No conversation history available
-                </div>
-                <div className="text-slate-600 font-mono text-xs">
-                  Start a new session to begin recording dialogue
-                </div>
+                <MessageSquare />
+                <div>No conversation history available</div>
+                <div>Start a new session to begin recording dialogue</div>
               </motion.div>
             ) : (
               filteredEntries.map((entry) => (
@@ -288,21 +280,21 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, x: -32 }}
                   transition={{ duration: 0.2 }}
-                  className={`relative group p-3.5 rounded-2xl border transition-all ${entry.isSelected ? "bg-purple-500/20 border-purple-500/40 shadow-[0_0_20px_rgba(168,85,247,0.2)]" : entry.role === "user" ? "bg-gradient-to-r from-cyan-900/20 to-transparent border-cyan-500/20 hover:border-cyan-500/40" : "bg-gradient-to-r from-purple-900/20 to-transparent border-purple-500/20 hover:border-purple-500/40"} ${entry.isError ? "border-rose-500/40" : ""}`}
+                  className={`t-entry${entry.role === "user" ? " is-user" : " is-model"}${entry.isError ? " is-error" : ""}`}
                   onClick={() => toggleEntrySelection(entry.id)}
                 >
                   {/* Entry header */}
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${entry.role === "user" ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" : "bg-purple-500/20 text-purple-300 border border-purple-500/30"}`}>
+                  <div className="t-entry-head">
+                    <div className="t-entry-meta">
+                      <span className={`t-role ${entry.role}`}>
                         {entry.role}
                       </span>
-                      <span className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
-                        <Clock className="w-3 h-3" /> {formatTimestamp(entry)}
+                      <span className="t-time">
+                        <Clock /> {formatTimestamp(entry)}
                       </span>
                       {entry.emotion && entry.emotion !== "idle" && (
-                        <span className="flex items-center gap-1 text-[10px] text-orange-400">
-                          <Palette className="w-3 h-3" /> {entry.emotion}
+                        <span className="t-role model">
+                          <Palette style={{ width: 11, height: 11 }} /> {entry.emotion}
                         </span>
                       )}
                     </div>
@@ -311,35 +303,19 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
                         e.stopPropagation();
                         copyEntry(entry);
                       }}
-                      className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-500 hover:text-slate-200 transition opacity-0 group-hover:opacity-100"
+                      className="t-copy"
                       title="Copy to clipboard"
+                      aria-label="Copy entry to clipboard"
                     >
-                      <Copy className="w-3 h-3" />
+                      <Copy />
                     </button>
                   </div>
 
                   {/* Entry content */}
                   <div
-                    className="text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap break-words"
+                    className="t-body"
                     dangerouslySetInnerHTML={{ __html: highlightMatch(entry.content, searchTerm) }}
                   />
-
-                  {/* Ambient emotion lighting hint */}
-                  {entry.emotion && entry.emotion !== "idle" && (
-                    <div className="mt-2.5 pt-2.5 border-t border-white/5">
-                      <div className="flex items-center gap-2">
-                        <Palette className="w-3 h-3 text-orange-400" />
-                        <span className="text-[10px] text-orange-300 font-mono">
-                          Emotion: {entry.emotion}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Selection indicator */}
-                  {entry.isSelected && (
-                    <div className="absolute top-0 left-0 bottom-0 w-1 bg-gradient-to-b from-cyan-400 via-purple-400 to-cyan-400" />
-                  )}
                 </motion.div>
               ))
             )}
@@ -348,16 +324,12 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
 
         {/* Minimized view */}
         {isMinimized && (
-          <div className="p-3.5 text-center">
-            <div className="text-xs text-slate-400 font-mono uppercase tracking-wider mb-2">
-              Transcript
-            </div>
-            <div className="text-slate-300 font-bold text-sm">
+          <div className="transcript-empty" style={{ padding: "14px 20px" }}>
+            <div className="panel-title" style={{ justifyContent: "center" }}>Transcript</div>
+            <div style={{ color: "var(--ink)", fontWeight: 700, marginTop: 6 }}>
               {entries.length} entries
             </div>
-            <div className="text-[10px] text-slate-600 mt-1">
-              Press F4 to expand
-            </div>
+            <div style={{ fontSize: 10, marginTop: 4 }}>Press F4 to expand</div>
           </div>
         )}
       </motion.div>

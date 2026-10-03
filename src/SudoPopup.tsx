@@ -87,28 +87,13 @@ export const SudoPopup: React.FC<SudoPopupProps> = ({
       <motion.div
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="fixed top-4 left-4 z-50 flex items-center gap-2"
+        className={`sudo-dot${hasPending ? " is-pending" : " is-ok"}`}
       >
-        <div className={`relative flex h-3 w-3 ${hasPending ? "animate-pulse" : ""}`}>
-          <span
-            className={`absolute inline-flex h-full w-full rounded-full ${
-              hasPending ? "bg-yellow-500" : "bg-green-500"
-            } opacity-75`}
-          />
-          <span
-            className={`relative inline-flex rounded-full h-3 w-3 ${
-              hasPending ? "bg-yellow-500" : "bg-green-500"
-            }`}
-          />
-        </div>
-        <span className="text-xs font-mono text-slate-300">
-          Sudo {hasPending ? "PENDING" : "SECURE"}
+        <span className="orb" aria-hidden="true" />
+        <span>
+          Sudo {hasPending ? "pending" : "secure"}
         </span>
-        {hasPending && (
-          <span className="text-xs font-mono text-yellow-400 animate-pulse">
-            {dots}
-          </span>
-        )}
+        {hasPending && <span className="pending-dots">{dots}</span>}
       </motion.div>
 
       {/* Sudo Confirmation Dialog */}
@@ -118,55 +103,55 @@ export const SudoPopup: React.FC<SudoPopupProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+            className="modal-backdrop"
           >
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="bg-slate-950 border border-white/10 rounded-3xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(99,102,241,0.3)]"
+              className="dialog"
+              role="alertdialog"
+              aria-label="Sudo confirmation required"
             >
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 rounded-xl bg-red-500/20 border border-red-500/30">
-                  <Shield className="w-5 h-5 text-red-400" />
+              <div className="dialog-head">
+                <div className="dialog-icon">
+                  <Shield />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold font-mono text-white">
-                    SUDO CONFIRMATION REQUIRED
-                  </h3>
-                  <p className="text-xs text-slate-400 font-mono">
+                  <h3 className="dialog-title">Confirmation required</h3>
+                  <p className="dialog-sub">
                     Command execution needs your approval
                   </p>
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-900/50 border border-slate-700/30 mb-4">
-                <div className="text-xs text-slate-500 font-mono mb-1">COMMAND:</div>
-                <div className="font-mono text-sm text-slate-200 break-all">
+              <div className="dialog-code">
+                <div className="k">Command</div>
+                <div className="v">
                   {selectedRequest.command}
                 </div>
                 {selectedRequest.package && (
                   <>
-                    <div className="text-xs text-slate-500 font-mono mt-2 mb-1">PACKAGE:</div>
-                    <div className="font-mono text-sm text-cyan-300">
+                    <div className="k" style={{ marginTop: 10 }}>Package</div>
+                    <div className="v" style={{ color: "var(--cyan)" }}>
                       {selectedRequest.package}
                     </div>
                   </>
                 )}
               </div>
 
-              <div className="flex items-center gap-2 mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                <Clock className="w-4 h-4 text-amber-400" />
-                <span className="text-sm font-mono text-amber-300">
-                  Expires in: <span className="font-bold">{formatTimeLeft(timeLeft)}</span>
+              <div className="notice amber">
+                <Clock />
+                <span>
+                  Expires in: <strong>{formatTimeLeft(timeLeft)}</strong>
                 </span>
               </div>
 
-              <div className="flex items-start gap-2 mb-6 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-                <AlertCircle className="w-4 h-4 text-red-400 mt-0.5" />
-                <div className="text-xs text-red-300 font-mono">
-                  <div className="font-bold mb-1">SECURITY WARNING</div>
+              <div className="notice rose">
+                <AlertCircle />
+                <div>
+                  <div className="strong">Security warning</div>
                   <div>
                     This command will execute with elevated privileges. Only approve if you trust
                     the source.
@@ -174,20 +159,20 @@ export const SudoPopup: React.FC<SudoPopupProps> = ({
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="dialog-actions">
                 <button
                   onClick={handleReject}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 font-mono transition cursor-pointer"
+                  className="btn btn-reject"
                 >
-                  <X className="w-4 h-4" />
-                  REJECT
+                  <X />
+                  Reject
                 </button>
                 <button
                   onClick={handleApprove}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-green-500/20 hover:bg-green-500/30 border border-green-500/30 text-green-300 font-mono transition cursor-pointer"
+                  className="btn btn-approve"
                 >
-                  <Check className="w-4 h-4" />
-                  APPROVE
+                  <Check />
+                  Approve
                 </button>
               </div>
             </motion.div>

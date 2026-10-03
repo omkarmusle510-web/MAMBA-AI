@@ -15,36 +15,26 @@ interface ToastContainerProps {
 
 export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onDismiss }) => {
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col items-center gap-2 pointer-events-none">
+    <div className="toast-stack" aria-live="polite">
       <AnimatePresence>
         {toasts.map((t) => {
-          const isMilestone = t.type === "milestone" || t.type === "info";
-          const isError = t.type === "error";
-          const isSuccess = t.type === "success";
+          const tone =
+            t.type === "error"
+              ? "t-error"
+              : t.type === "success"
+              ? "t-success"
+              : t.type === "milestone" || t.type === "info"
+              ? "t-info"
+              : "t-reminder";
 
-          const borderColor = isError
-            ? "border-rose-500/30"
-            : isSuccess
-            ? "border-emerald-500/30"
-            : isMilestone
-            ? "border-cyan-500/30"
-            : "border-amber-500/30";
-
-          const labelColor = isError
-            ? "text-rose-400"
-            : isSuccess
-            ? "text-emerald-400"
-            : isMilestone
-            ? "text-cyan-400"
-            : "text-amber-400";
-
-          const label = isError
-            ? "Notice"
-            : isSuccess
-            ? "Success"
-            : isMilestone
-            ? "Status"
-            : "Reminder";
+          const label =
+            t.type === "error"
+              ? "Notice"
+              : t.type === "success"
+              ? "Success"
+              : t.type === "milestone" || t.type === "info"
+              ? "Status"
+              : "Reminder";
 
           return (
             <motion.div
@@ -53,22 +43,23 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onDismis
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -20, scale: 0.9 }}
               transition={{ type: "spring", damping: 20, stiffness: 300 }}
-              className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl border ${borderColor} bg-[#0a0a14]/90 backdrop-blur-xl shadow-[0_0_30px_rgba(0,0,0,0.5)] max-w-sm`}
+              className={`toast ${tone}`}
             >
-              <div className={`p-1.5 rounded-lg shrink-0 ${isMilestone ? "bg-cyan-500/15" : isError ? "bg-rose-500/15" : "bg-amber-500/15"}`}>
-                <Bell size={14} className={labelColor} />
+              <div className="toast-icon">
+                <Bell />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className={`text-[10px] font-mono uppercase tracking-widest ${labelColor} mb-0.5`}>
+              <div className="toast-body">
+                <div className="toast-label">
                   {label}
                 </div>
-                <p className="text-xs text-white/90 leading-relaxed">{t.text}</p>
+                <p className="toast-text">{t.text}</p>
               </div>
               <button
                 onClick={() => onDismiss(t.id)}
-                className="shrink-0 p-1 rounded-lg hover:bg-white/10 text-slate-500 hover:text-white transition cursor-pointer"
+                className="toast-dismiss"
+                aria-label="Dismiss notification"
               >
-                <X size={12} />
+                <X />
               </button>
             </motion.div>
           );

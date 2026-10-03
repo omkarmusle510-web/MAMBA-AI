@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Mamba AI Runtime Architecture",
+    "subtitle": "Desktop assistant request flow, capability execution, and local-first integrations",
+    "output": ".archify/architecture-mamba-20261002-094946/mamba-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/omkarmusle510-web/MAMBA-AI.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6c609bdb0556029a077b5e9e83c7fbc12dc77f77"
+    }
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "User", "sublabel": "Typed or spoken request", "pos": [30, 270], "size": [150, 64], "sources": [{ "path": "app.py", "line": 142 }] },
+    { "id": "desktop", "type": "frontend", "label": "Electron Desktop Shell", "sublabel": "Windows lifecycle, tray, hotkey, orb", "pos": [260, 270], "size": [190, 70], "sources": [{ "path": "electron/main.cjs", "line": 1 }, { "path": "electron/backendManager.cjs", "line": 1 }, { "path": "electron/preload.cjs", "line": 1 }] },
+    { "id": "ui", "type": "frontend", "label": "React UI", "sublabel": "Chat, transcript, settings, approval, voice", "pos": [530, 270], "size": [190, 70], "sources": [{ "path": "src/main.tsx", "line": 1 }, { "path": "src/audio.ts", "line": 1 }, { "path": "package.json", "line": 1 }] },
+    { "id": "api", "type": "backend", "label": "FastAPI Transport", "sublabel": "HTTP + WebSocket on 127.0.0.1:8000", "pos": [700, 270], "size": [190, 70], "sources": [{ "path": "api/server.py", "line": 1 }, { "path": "app.py", "line": 154 }, { "path": "vite.config.ts", "line": 6 }] },
+    { "id": "core", "type": "backend", "label": "Mamba Core / Brain", "sublabel": "Context, planning, permissions, execution, verification", "pos": [950, 270], "size": [220, 78], "sources": [{ "path": "core/brain.py", "line": 431 }, { "path": "core/runtime.py", "line": 23 }, { "path": "app.py", "line": 76 }] },
+    { "id": "planner", "type": "backend", "label": "Planning Agent", "sublabel": "Capability-grounded JSON ExecutionPlan", "pos": [820, 120], "size": [160, 70], "sources": [{ "path": "agents/planning_agent.py", "line": 248 }, { "path": "app.py", "line": 78 }] },
+    { "id": "router", "type": "backend", "label": "Model Router", "sublabel": "Capability-aware selection with fallback", "pos": [1010, 120], "size": [160, 70], "sources": [{ "path": "models/router.py", "line": 60 }, { "path": "app.py", "line": 77 }] },
+    { "id": "llm", "type": "cloud", "label": "LLM Providers", "sublabel": "NVIDIA NIM, Groq, Google Gemini; env API keys", "pos": [1200, 120], "size": [180, 70], "sources": [{ "path": "models/providers/nvidia.py", "line": 31 }, { "path": "models/providers/groq.py", "line": 28 }, { "path": "models/providers/gemini.py", "line": 26 }] },
+    { "id": "executor", "type": "backend", "label": "Task Executor", "sublabel": "Intent to handler, returns observations", "pos": [820, 380], "size": [170, 70], "sources": [{ "path": "tasks/executor.py", "line": 28 }, { "path": "skills/mixed.py", "line": 434 }] },
+    { "id": "skills", "type": "backend", "label": "Skills / Capability Adapters", "sublabel": "Filesystem, terminal, desktop, screen, web, GitHub, productivity", "pos": [1050, 380], "size": [240, 78], "sources": [{ "path": "skills/mixed.py", "line": 1 }, { "path": "core/capabilities.py", "line": 1 }] },
+    { "id": "tools", "type": "backend", "label": "Tools and Integrations", "sublabel": "Action handlers and service clients", "pos": [1330, 380], "size": [180, 70], "sources": [{ "path": "tools/tool.py", "line": 1 }, { "path": "tools/github/tool.py", "line": 1 }, { "path": "tools/web/providers.py", "line": 1 }] },
+    { "id": "services", "type": "external", "label": "Outbound Services", "sublabel": "Tavily, GitHub REST, local/simulated productivity providers", "pos": [1050, 800], "size": [230, 70], "sources": [{ "path": "tools/github/tool.py", "line": 1 }, { "path": "tools/web/providers.py", "line": 1 }, { "path": "skills/email.py", "line": 1 }] },
+    { "id": "permissions", "type": "security", "label": "Permission Policy", "sublabel": "Low/medium allow; high ask; critical deny", "pos": [450, 650], "size": [200, 70], "sources": [{ "path": "permissions/policy.py", "line": 44 }, { "path": "core/brain.py", "line": 1 }] },
+    { "id": "verifier", "type": "backend", "label": "Outcome Verifier", "sublabel": "Checks observations, files, exits, predicates", "pos": [1050, 560], "size": [210, 70], "sources": [{ "path": "verification/verifier.py", "line": 1 }, { "path": "core/brain.py", "line": 1 }] },
+    { "id": "memory", "type": "database", "label": "SQLite Memory", "sublabel": ".mamba/memory.db; hybrid retrieval and embeddings", "pos": [1130, 900], "size": [220, 70], "sources": [{ "path": "memory/persistent.py", "line": 76 }, { "path": "memory/manager.py", "line": 1 }] },
+    { "id": "localjson", "type": "database", "label": "Local JSON State", "sublabel": ".mamba/settings.json and reminders.json", "pos": [450, 450], "size": [190, 70], "sources": [{ "path": "api/server.py", "line": 71 }, { "path": "api/server.py", "line": 250 }] },
+    { "id": "voice", "type": "backend", "label": "Voice Interface", "sublabel": "Transcribe, run Core, synthesize response", "pos": [700, 500], "size": [220, 70], "sources": [{ "path": "voice/interface.py", "line": 34 }, { "path": "api/server.py", "line": 100 }] },
+    { "id": "stt", "type": "cloud", "label": "Groq Whisper STT", "sublabel": "Audio transcription API", "pos": [700, 700], "size": [180, 70], "sources": [{ "path": "voice/stt.py", "line": 17 }, { "path": "voice/interface.py", "line": 44 }] },
+    { "id": "tts", "type": "cloud", "label": "Cloudflare Aura TTS", "sublabel": "Workers AI audio synthesis", "pos": [950, 700], "size": [190, 70], "sources": [{ "path": "voice/tts.py", "line": 17 }, { "path": "voice/interface.py", "line": 44 }] },
+    { "id": "browser", "type": "backend", "label": "Browser Session", "sublabel": "Bound target, semantic actions, drift refusal", "pos": [700, 900], "size": [200, 70], "sources": [{ "path": "tools/browser/session.py", "line": 95 }, { "path": "skills/browser.py", "line": 1 }] },
+    { "id": "mcp", "type": "external", "label": "Playwright MCP", "sublabel": "@playwright/mcp over JSON-RPC stdio", "pos": [1200, 900], "size": [180, 70], "sources": [{ "path": "tools/browser/mcp.py", "line": 256 }] },
+    { "id": "chrome", "type": "external", "label": "Chrome", "sublabel": "Controlled browser pages", "pos": [1200, 1060], "size": [120, 70], "sources": [{ "path": "tools/browser/mcp.py", "line": 1 }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Windows Desktop Boundary", "wraps": ["desktop", "ui"] },
+    { "kind": "security-group", "label": "Loopback Transport Boundary", "wraps": ["api", "core", "planner", "router", "executor", "skills", "permissions", "verifier", "voice"] },
+    { "kind": "region", "label": "Local Persistence", "wraps": ["memory", "localjson"] }
+  ],
+  "connections": [
+    { "id": "user-desktop", "from": "user", "to": "desktop", "variant": "emphasis" },
+    { "id": "desktop-ui", "from": "desktop", "to": "ui", "label": "render" },
+    { "id": "desktop-api", "from": "desktop", "to": "api", "label": "spawn / health", "variant": "security", "fromSide": "bottom", "toSide": "bottom" },
+    { "id": "ui-api", "from": "ui", "to": "api", "label": "WS", "variant": "emphasis" },
+    { "id": "api-core", "from": "api", "to": "core", "label": "run" },
+    { "id": "api-json", "from": "api", "to": "localjson", "label": "settings / reminders", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "core-planner", "from": "core", "to": "planner", "label": "build execution plan", "fromSide": "top", "toSide": "bottom" },
+    { "id": "planner-router", "from": "planner", "to": "router" },
+    { "id": "router-llm", "from": "router", "to": "llm", "variant": "emphasis" },
+    { "id": "core-executor", "from": "core", "to": "executor", "label": "execute plan steps" },
+    { "id": "executor-skills", "from": "executor", "to": "skills" },
+    { "id": "skills-tools", "from": "skills", "to": "tools" },
+    { "id": "tools-services", "from": "tools", "to": "services", "label": "REST", "variant": "dashed" },
+    { "id": "core-permissions", "from": "core", "to": "permissions", "variant": "security", "fromSide": "left", "toSide": "top", "via": [[900, 309], [900, 540], [550, 540]] },
+    { "id": "permissions-ui", "from": "permissions", "to": "ui", "label": "approval request", "variant": "security" },
+    { "id": "ui-approval", "from": "ui", "to": "api", "label": "typed approval", "variant": "security", "fromSide": "bottom", "toSide": "bottom" },
+    { "id": "executor-verifier", "from": "executor", "to": "verifier", "label": "observation" },
+    { "id": "verifier-core", "from": "verifier", "to": "core", "variant": "dashed", "fromSide": "left", "toSide": "bottom" },
+    { "id": "core-memory", "from": "core", "to": "memory", "label": "retrieve / persist", "variant": "dashed" },
+    { "id": "ui-voice", "from": "ui", "to": "voice", "label": "audio over /live" },
+    { "id": "api-voice", "from": "api", "to": "voice", "label": "voice turn adapter" },
+    { "id": "voice-stt", "from": "voice", "to": "stt", "variant": "dashed" },
+    { "id": "voice-tts", "from": "voice", "to": "tts", "variant": "dashed" },
+    { "id": "skills-browser", "from": "skills", "to": "browser", "label": "browser intent", "fromSide": "bottom", "toSide": "top" },
+    { "id": "browser-mcp", "from": "browser", "to": "mcp", "label": "MCP", "variant": "dashed" },
+    { "id": "mcp-chrome", "from": "mcp", "to": "chrome", "label": "page control", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Primary request path", "items": ["Electron / React sends text or audio to FastAPI", "Transport delegates to MambaRuntime and Brain", "Planner, executor, verifier, and memory close the turn"] },
+    { "dot": "rose", "title": "Trust and safety", "items": ["Backend binds to loopback by default", "Electron uses contextIsolation and a restricted preload bridge", "High-risk actions ask; critical actions are denied; API auth is not implemented"] },
+    { "dot": "emerald", "title": "Local-first state", "items": ["Durable memory is SQLite at .mamba/memory.db", "Settings and reminders are local JSON files", "Provider credentials are read from environment variables"] },
+    { "dot": "amber", "title": "Optional integrations", "items": ["LLM inference: NVIDIA NIM, Groq, Gemini", "Voice: Groq Whisper plus Cloudflare Aura", "Browser: Playwright MCP subprocess controls Chrome"] }
+  ]
+}

@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\candidate.json",
+    "sha256": "f506880d4072e141440829e61cca1ac900674a2ae62d4bdca21bbbb467627f48",
+    "bytes": 10630
+  },
+  "artifact": {
+    "path": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\mamba-architecture.html"
+  },
+  "gates": {
+    "validate": "fail",
+    "deliver": "not-run",
+    "check": "not-run",
+    "browser-check": "not-run"
+  },
+  "failedStage": "validate",
+  "diagnostics": [
+    {
+      "code": "clean-flow/edge-through-node",
+      "severity": "error",
+      "message": "[clean-flow/edge-through-node] architecture connections[13] id \"core-permissions\" \"core\" -> \"permissions\" crosses component \"api\" (unrelated to this relationship) on segment 0 [950, 323] -> [800, 323] (2px clearance) — adjust fromSide/toSide, set route/via, or move the component.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 13,
+        "id": "core-permissions",
+        "from": "core",
+        "to": "permissions"
+      },
+      "evidence": {
+        "obstacleKind": "component",
+        "obstacleId": "api",
+        "segmentIndex": 0,
+        "from": [
+          950,
+          323
+        ],
+        "to": [
+          800,
+          323
+        ],
+        "clearancePx": 2
+      },
+      "supportedFixes": [
+        "adjust fromSide/toSide, set route/via, or move the component"
+      ]
+    },
+    {
+      "code": "composition/ambiguous-corridor",
+      "severity": "error",
+      "message": "[composition/ambiguous-corridor] showcase architecture connections[13] id \"core-permissions\" \"core\" -> \"permissions\" shares a 112px corridor with connections[20] id \"api-voice\" \"api\" -> \"voice\" at [800, 364] -> [800, 476] (segments 1 and 2; minimum 8px) — adjust route/via or fromSide/toSide so distinct connections do not visually merge.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 13,
+        "id": "core-permissions",
+        "from": "core",
+        "to": "permissions"
+      },
+      "evidence": {
+        "otherRelationship": {
+          "diagramType": "architecture",
+          "collection": "connections",
+          "index": 20,
+          "id": "api-voice",
+          "from": "api",
+          "to": "voice"
+        },
+        "overlapLengthPx": 112,
+        "minimumPx": 8,
+        "from": [
+          800,
+          364
+        ],
+        "to": [
+          800,
+          476
+        ],
+        "segmentIndex": 1,
+        "otherSegmentIndex": 2
+      },
+      "supportedFixes": [
+        "adjust route/via or fromSide/toSide so distinct connections do not visually merge"
+      ]
+    },
+    {
+      "code": "composition/label-route-clearance",
+      "severity": "error",
+      "message": "[composition/label-route-clearance] showcase architecture label \"voice turn adapter\" on connections[20] id \"api-voice\" \"api\" -> \"voice\" label \"voice turn adapter\" is 0px from connections[2] id \"desktop-api\" \"desktop\" -> \"api\" label \"spawn / health\" segment 2 [774, 404] -> [774, 340] (label rect [760, 344, 96, 14]; minimum 4px) — if the authored fromSide/toSide are not required by the user, remove them so the renderer can re-plan; otherwise preserve that intent and adjust labelAt, labelDx, labelDy, or labelSegment; otherwise adjust the other relationship route/via/channel.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 20,
+        "id": "api-voice",
+        "from": "api",
+        "to": "voice"
+      },
+      "evidence": {
+        "label": "voice turn adapter",
+        "otherRelationship": {
+          "diagramType": "architecture",
+          "collection": "connections",
+          "index": 2,
+          "id": "desktop-api",
+          "from": "desktop",
+          "to": "api"
+        },
+        "segmentIndex": 2,
+        "clearancePx": 0,
+        "minimumPx": 4,
+        "labelRect": {
+          "relation": {
+            "id": "api-voice",
+            "from": "api",
+            "to": "voice",
+            "label": "voice turn adapter"
+          },
+          "relationIndex": 20,
+          "label": "voice turn adapter",
+          "x": 759.8,
+          "y": 344,
+          "width": 96.39999999999999,
+          "height": 14,
+          "lx": 808,
+          "ly": 354
+        },
+        "from": [
+          774,
+          404
+        ],
+        "to": [
+          774,
+          340
+        ]
+      },
+      "supportedFixes": [
+        "if the authored fromSide/toSide are not required by the user, remove them so the renderer can re-plan; otherwise preserve that intent and adjust labelAt, labelDx, labelDy, or labelSegment; otherwise adjust the other relationship route/via/channel"
+      ]
+    },
+    {
+      "code": "layout/constraint",
+      "severity": "error",
+      "message": "Components \"ui\" and \"api\" are less than 8px apart — move one or shrink its size.\n  \"ui\" [530, 270, 190, 70]; \"api\" [700, 270, 190, 70]\n  Suggested fix: move \"api\" pos to [728, 270] (right of \"ui\") or [700, 348] (below)",
+      "subject": {
+        "diagramType": "architecture"
+      }
+    },
+    {
+      "code": "clean-flow/edge-through-node",
+      "severity": "error",
+      "message": "[clean-flow/edge-through-node] architecture connections[18] id \"core-memory\" \"core\" -> \"memory\" crosses component \"skills\" (unrelated to this relationship) on segment 0 [1067, 348] -> [1067, 624] (2px clearance) — adjust fromSide/toSide, set route/via, or move the component.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 18,
+        "id": "core-memory",
+        "from": "core",
+        "to": "memory"
+      },
+      "evidence": {
+        "obstacleKind": "component",
+        "obstacleId": "skills",
+        "segmentIndex": 0,
+        "from": [
+          1067,
+          348
+        ],
+        "to": [
+          1067,
+          624
+        ],
+        "clearancePx": 2
+      },
+      "supportedFixes": [
+        "adjust fromSide/toSide, set route/via, or move the component"
+      ]
+    },
+    {
+      "code": "clean-flow/edge-through-node",
+      "severity": "error",
+      "message": "[clean-flow/edge-through-node] architecture connections[23] id \"skills-browser\" \"skills\" -> \"browser\" crosses component \"verifier\" (unrelated to this relationship) on segment 0 [1170, 458] -> [1170, 679] (2px clearance) — if the authored fromSide/toSide are not required by the user, remove them so the renderer can re-plan; otherwise preserve that intent and adjust fromSide/toSide, set route/via, or move the component.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 23,
+        "id": "skills-browser",
+        "from": "skills",
+        "to": "browser"
+      },
+      "evidence": {
+        "obstacleKind": "component",
+        "obstacleId": "verifier",
+        "segmentIndex": 0,
+        "from": [
+          1170,
+          458
+        ],
+        "to": [
+          1170,
+          679
+        ],
+        "clearancePx": 2
+      },
+      "supportedFixes": [
+        "if the authored fromSide/toSide are not required by the user, remove them so the renderer can re-plan; otherwise preserve that intent and adjust fromSide/toSide, set route/via, or move the component"
+      ]
+    },
+    {
+      "code": "clean-flow/edge-through-node",
+      "severity": "error",
+      "message": "[clean-flow/edge-through-node] architecture connections[13] id \"core-permissions\" \"core\" -> \"permissions\" crosses component \"voice\" (unrelated to this relationship) on segment 1 [800, 323] -> [800, 685] (2px clearance) — adjust fromSide/toSide, set route/via, or move the component.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 13,
+        "id": "core-permissions",
+        "from": "core",
+        "to": "permissions"
+      },
+      "evidence": {
+        "obstacleKind": "component",
+        "obstacleId": "voice",
+        "segmentIndex": 1,
+        "from": [
+          800,
+          323
+        ],
+        "to": [
+          800,
+          685
+        ],
+        "clearancePx": 2
+      },
+      "supportedFixes": [
+        "adjust fromSide/toSide, set route/via, or move the component"
+      ]
+    },
+    {
+      "code": "clean-flow/edge-through-node",
+      "severity": "error",
+      "message": "[clean-flow/edge-through-node] architecture connections[18] id \"core-memory\" \"core\" -> \"memory\" crosses component \"services\" (unrelated to this relationship) on segment 2 [1240, 624] -> [1240, 900] (2px clearance) — adjust fromSide/toSide, set route/via, or move the component.",
+      "subject": {
+        "diagramType": "architecture",
+        "collection": "connections",
+        "index": 18,
+        "id": "core-memory",
+        "from": "core",
+        "to": "memory"
+      },
+      "evidence": {
+        "obstacleKind": "component",
+        "obstacleId": "services",
+        "segmentIndex": 2,
+        "from": [
+          1240,
+          624
+        ],
+        "to": [
+          1240,
+          900
+        ],
+        "clearancePx": 2
+      },
+      "supportedFixes": [
+        "adjust fromSide/toSide, set route/via, or move the component"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 17,
+    "shown": 8,
+    "truncated": true
+  },
+  "evidence": {
+    "receipt": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\mamba-architecture.finalize.json",
+    "summaryReceipt": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\mamba-architecture.finalize-summary.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.0.1",
+    "availableVersion": "3.0.1",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-02T04:23:37.449Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3798,
+  "nextAction": {
+    "action": "edit-in-place",
+    "candidate": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\candidate.json",
+    "constraint": "Preserve all semantics and user-fixed geometry. Use references/architecture-layout-repair.md to choose a local repair or connected-scene reflow; edit the existing candidate.",
+    "then": "finalize-once"
+  }
+}

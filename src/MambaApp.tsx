@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
-import { MessageSquare, Globe, Mic, MicOff, Settings, Volume2 } from "lucide-react";
+import { MessageSquare, Globe, Mic, MicOff, Settings } from "lucide-react";
 
 import { MambaAudioSession, LiveState } from "./audio";
 import { MambaPresence, MambaPresenceState } from "./MambaPresence";
 import { SudoPopup } from "./SudoPopup";
 import { SettingsPanel } from "./SettingsPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { TextChatFallback } from "./TextChatFallback";
+import { Composer } from "./Composer";
 import { ToastContainer, useToast } from "./Toast";
 import { BrowserAgent } from "./BrowserAgent";
 import { loadSettings, saveSettings, MambaSettings } from "./settingsStore";
@@ -25,7 +25,6 @@ export const MambaApp: React.FC = () => {
   const [settings, setSettings] = useState<MambaSettings>(loadSettings);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
-  const [isTextChatOpen, setIsTextChatOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState<string | null>(null);
 
   // Settings panel & Windows startup preference.
@@ -308,8 +307,27 @@ export const MambaApp: React.FC = () => {
       ? "listening"
       : "idle";
 
+  // Subtle status caption for the stage (the orb itself stays label-free).
+  const statusCopy: Record<string, { text: string; hint: string; pill: string }> = {
+    idle: {
+      text: "Ready",
+      hint: settings.wakeWordEnabled
+        ? `Say "${settings.wakePhrase || "hey mamba"}" or click the orb`
+        : "Click the orb or type below",
+      pill: "",
+    },
+    listening: { text: "Listening", hint: "Speak your command", pill: "is-listening" },
+    thinking: { text: "Thinking", hint: "Planning & reasoning", pill: "is-thinking" },
+    speaking: { text: "Speaking", hint: "Responding", pill: "is-speaking" },
+    permission: { text: "Approval needed", hint: "Review the request to continue", pill: "is-permission" },
+    error: { text: "Something went wrong", hint: "Check the connection and try again", pill: "is-error" },
+    connecting: { text: "Connecting", hint: "Starting transport", pill: "" },
+    disconnected: { text: "Disconnected", hint: "Restart the backend to reconnect", pill: "is-error" },
+  };
+  const status = statusCopy[liveState] ?? statusCopy.idle;
+
   return (
-    <div className="relative w-screen h-screen bg-slate-950 text-white flex flex-col items-center justify-between p-6 select-none overflow-hidden">
+    <div className="mamba-shell">
       {/* Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
 
@@ -332,125 +350,114 @@ export const MambaApp: React.FC = () => {
         onWakeWordChange={handleWakeWordChange}
       />
 
-      {/* Header Bar */}
-      <div className="w-full flex items-center justify-between z-20">
-        <div className="flex items-center gap-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-          <h1 className="text-sm font-bold font-mono tracking-widest text-slate-300">
-            MAMBA AI
-          </h1>
+      {/* Header */}
+      <header className="mamba-header">
+        <div className="brand">
+          <span className="brand-dot" aria-hidden="true" />
+          <span className="brand-name">Mamba</span>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Transcript toggle */}
+        <div className="header-actions">
+          <div className="header-status" aria-live="polite">
+            <span className={`pill ${status.pill}`}>
+              <span className="dot" aria-hidden="true" />
+              <span className="pill-label">{status.text}</span>
+            </span>
+          </div>
+
           <button
             onClick={() => setIsTranscriptOpen(!isTranscriptOpen)}
-            className={`p-2.5 rounded-xl border transition ${
-              isTranscriptOpen
-                ? "bg-purple-500/20 border-purple-500/40 text-purple-300"
-                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-            }`}
-            title="Toggle Transcript"
+            className={`icon-btn${isTranscriptOpen ? " is-active" : ""}`}
+            title="Conversation transcript"
+            aria-label="Conversation transcript"
+            aria-pressed={isTranscriptOpen}
           >
-            <MessageSquare className="w-4 h-4" />
+            <MessageSquare />
           </button>
 
-          {/* Browser viewport toggle */}
           <button
             onClick={() => setBrowserUrl(browserUrl ? null : "about:blank")}
-            className={`p-2.5 rounded-xl border transition ${
-              browserUrl
-                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-            }`}
-            title="Toggle Browser View"
+            className={`icon-btn${browserUrl ? " is-active" : ""}`}
+            title="Browser view"
+            aria-label="Browser view"
+            aria-pressed={!!browserUrl}
           >
-            <Globe className="w-4 h-4" />
+            <Globe />
           </button>
 
-          {/* Text Chat toggle */}
-          <button
-            onClick={() => setIsTextChatOpen(!isTextChatOpen)}
-            className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-white transition"
-            title="Toggle Text Input"
-          >
-            <Volume2 className="w-4 h-4" />
-          </button>
-
-          {/* Voice session toggle (Phase 8 continuous conversation) */}
           <button
             onClick={toggleVoiceSession}
-            className={`p-2.5 rounded-xl border transition ${
-              continuousVoiceActive
-                ? "bg-red-500/20 border-red-500/40 text-red-300"
-                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-            }`}
+            className={`icon-btn${continuousVoiceActive ? " is-active is-danger" : ""}`}
             title={continuousVoiceActive ? "Stop voice session" : "Start voice session"}
+            aria-label={continuousVoiceActive ? "Stop voice session" : "Start voice session"}
+            aria-pressed={continuousVoiceActive}
           >
-            {continuousVoiceActive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            {continuousVoiceActive ? <MicOff /> : <Mic />}
           </button>
 
-          {/* Settings toggle */}
           <button
             onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-            className={`p-2.5 rounded-xl border transition ${
-              isSettingsOpen
-                ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
-                : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-            }`}
+            className={`icon-btn${isSettingsOpen ? " is-active" : ""}`}
             title="Settings"
+            aria-label="Settings"
+            aria-pressed={isSettingsOpen}
           >
-            <Settings className="w-4 h-4" />
+            <Settings />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Center — Mamba Presence State */}
-      <div className="flex-1 flex items-center justify-center z-10">
-        <MambaPresence
-          state={presenceState}
-          variant="orb"
-          size={260}
-          inputNode={audioSessionRef.current?.inputAnalyser}
-          outputNode={audioSessionRef.current?.outputAnalyser}
-          onClick={() => {
-            // Push-to-talk parity with the wake word: one voice turn.
-            runVoiceTurnRef.current();
+      {/* Center stage — the Orb */}
+      <main className="mamba-stage">
+        <div
+          className="orb-wrap"
+          role="button"
+          tabIndex={0}
+          aria-label="Mamba orb — activate voice turn"
+          onClick={() => runVoiceTurnRef.current()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              runVoiceTurnRef.current();
+            }
           }}
-        />
-      </div>
+        >
+          <MambaPresence
+            state={presenceState}
+            variant="orb"
+            size={260}
+            showLabel={false}
+            inputNode={audioSessionRef.current?.inputAnalyser}
+            outputNode={audioSessionRef.current?.outputAnalyser}
+          />
+        </div>
+        <div className="status-block" aria-live="polite">
+          <div className="status-text">{status.text}</div>
+          <div className="status-hint">{status.hint}</div>
+        </div>
+      </main>
 
-      {/* Bottom Controls / Status */}
-      <div className="w-full flex items-center justify-between text-xs font-mono text-slate-500 z-20">
-        <div>
-          Wake Word:{" "}
-          <span className="text-cyan-400">
-            {settings.wakeWordEnabled ? `"${settings.wakePhrase}"` : "disabled"}
-          </span>
+      {/* Bottom composer */}
+      <footer className="mamba-footer">
+        <Composer
+          onMessageSubmit={handleMessageSubmit}
+          voiceActive={continuousVoiceActive}
+          onToggleVoice={toggleVoiceSession}
+          disabled={liveState === "disconnected" || liveState === "connecting"}
+        />
+        <div className="composer-hint">
+          {settings.wakeWordEnabled
+            ? `Wake word "${settings.wakePhrase || "hey mamba"}" is on`
+            : "Wake word is off"}
+          {" · "}Enter to send, Shift+Enter for a new line
         </div>
-        <div>
-          Mode: <span className="text-slate-300 capitalize">{liveState}</span>
-        </div>
-      </div>
+      </footer>
 
       {/* Transcript Panel */}
       <TranscriptPanel
         entries={transcript}
         isOpen={isTranscriptOpen}
         onClose={() => setIsTranscriptOpen(false)}
-      />
-
-      {/* Text Chat Fallback input */}
-      <TextChatFallback
-        isActive={isTextChatOpen}
-        onClose={() => setIsTextChatOpen(false)}
-        onMessageSubmit={handleMessageSubmit}
-        systemStatus={{
-          state: liveState === "disconnected" ? "disconnected" : "connected",
-          transcriptCount: transcript.length,
-          timestamp: new Date().toISOString(),
-          status: "operational",
-        }}
       />
 
       {/* Browser Viewport Modal */}

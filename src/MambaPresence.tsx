@@ -40,65 +40,67 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
       outer: "rgba(99, 102, 241, 0.2)",
       inner: "rgba(129, 140, 248, 0.4)",
       glow: "rgba(99, 102, 241, 0.15)",
-      ring: "border-indigo-500/30",
-      text: "MAMBA",
-      subtext: "Ready",
+      ringColor: "rgba(99, 102, 241, 0.3)",
+      ringShadow: "none",
+      text: "Ready",
+      subtext: "Click the orb or type below",
     },
     listening: {
       outer: "rgba(6, 182, 212, 0.4)",
       inner: "rgba(34, 211, 238, 0.7)",
       glow: "rgba(6, 182, 212, 0.3)",
-      ring: "border-cyan-400/60 shadow-[0_0_50px_rgba(6,182,212,0.4)]",
-      text: "LISTENING",
-      subtext: "Say your command or 'Hey Mamba'",
+      ringColor: "rgba(34, 211, 238, 0.6)",
+      ringShadow: "0 0 50px rgba(6,182,212,0.4)",
+      text: "Listening",
+      subtext: "Say your command",
     },
     thinking: {
       outer: "rgba(168, 85, 247, 0.4)",
       inner: "rgba(192, 132, 252, 0.7)",
       glow: "rgba(168, 85, 247, 0.35)",
-      ring: "border-purple-400/60 shadow-[0_0_60px_rgba(168,85,247,0.4)]",
-      text: "THINKING",
-      subtext: "Planning & reasoning...",
+      ringColor: "rgba(192, 132, 252, 0.6)",
+      ringShadow: "0 0 60px rgba(168,85,247,0.4)",
+      text: "Thinking",
+      subtext: "Planning & reasoning",
     },
     speaking: {
       outer: "rgba(20, 184, 166, 0.4)",
       inner: "rgba(45, 212, 191, 0.7)",
       glow: "rgba(20, 184, 166, 0.35)",
-      ring: "border-teal-400/60 shadow-[0_0_60px_rgba(20,184,166,0.4)]",
-      text: "SPEAKING",
-      subtext: "Responding...",
+      ringColor: "rgba(45, 212, 191, 0.6)",
+      ringShadow: "0 0 60px rgba(20,184,166,0.4)",
+      text: "Speaking",
+      subtext: "Responding",
     },
     permission: {
       outer: "rgba(245, 158, 11, 0.4)",
       inner: "rgba(251, 191, 36, 0.8)",
       glow: "rgba(245, 158, 11, 0.35)",
-      ring: "border-amber-400/80 shadow-[0_0_60px_rgba(245,158,11,0.5)]",
-      text: "APPROVAL REQUIRED",
-      subtext: "Confirm elevated action in Sudo popup",
+      ringColor: "rgba(251, 191, 36, 0.8)",
+      ringShadow: "0 0 60px rgba(245,158,11,0.5)",
+      text: "Approval needed",
+      subtext: "Confirm the elevated action",
     },
     error: {
       outer: "rgba(239, 68, 68, 0.4)",
       inner: "rgba(248, 113, 113, 0.7)",
       glow: "rgba(239, 68, 68, 0.35)",
-      ring: "border-rose-500/60 shadow-[0_0_50px_rgba(239,68,68,0.4)]",
-      text: "ERROR",
+      ringColor: "rgba(244, 63, 94, 0.6)",
+      ringShadow: "0 0 50px rgba(239,68,68,0.4)",
+      text: "Error",
       subtext: "Execution interrupted",
     },
   }[state];
 
   return (
-    <div
-      className={`flex flex-col items-center justify-center select-none cursor-pointer transition-all ${className}`}
-      onClick={onClick}
-    >
+    <div className={`presence ${className}`}>
       <div
-        style={{ width: size, height: size }}
-        className="relative flex items-center justify-center"
+        style={{ width: size, height: size, position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}
       >
         {/* Outermost ambient glow - only for 2D pulse/circle variants */}
         {variant !== "orb" && (
           <motion.div
-            className="absolute inset-0 rounded-full blur-3xl pointer-events-none"
+            className="presence-glow"
             style={{ background: config.glow }}
             animate={{
               scale: state === "listening" ? [1, 1.3, 1] : state === "thinking" ? [1, 1.2, 1] : [1, 1.08, 1],
@@ -113,7 +115,7 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
         )}
 
         {variant === "orb" ? (
-          <div className="relative z-10 flex items-center justify-center bg-transparent">
+          <div className="presence-orb-slot">
             <OrbView
               state={state}
               inputNode={inputNode}
@@ -124,11 +126,13 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
         ) : (
           /* Pulse / Ring Visual Representation */
           <motion.div
-            className={`absolute rounded-full border ${config.ring}`}
+            className="presence-ring"
             style={{
               width: size * 0.88,
               height: size * 0.88,
               background: `radial-gradient(circle, ${config.inner} 0%, ${config.outer} 70%, transparent 100%)`,
+              border: `1px solid ${config.ringColor}`,
+              boxShadow: config.ringShadow,
             }}
             animate={{
               scale: state === "speaking" ? [0.95, 1.05, 0.95] : state === "thinking" ? [0.98, 1.02, 0.98] : 1,
@@ -141,14 +145,14 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
             }}
           >
             {/* Inner core node */}
-            <div className="w-full h-full rounded-full flex items-center justify-center backdrop-blur-sm">
+            <div className="presence-core">
               {state === "permission" ? (
-                <ShieldAlert className="w-10 h-10 text-amber-300 animate-pulse" />
+                <ShieldAlert style={{ width: 40, height: 40, color: "#fcd34d" }} />
               ) : state === "error" ? (
-                <AlertTriangle className="w-10 h-10 text-rose-300" />
+                <AlertTriangle style={{ width: 40, height: 40, color: "#fda4af" }} />
               ) : (
                 <motion.div
-                  className="w-12 h-12 rounded-full bg-white/20 border border-white/40 shadow-inner"
+                  className="presence-core-dot"
                   animate={{
                     scale: state === "listening" ? [1, 1.3, 1] : [1, 1.1, 1],
                     opacity: state === "idle" ? [0.5, 0.8, 0.5] : [0.8, 1, 0.8],
@@ -167,13 +171,9 @@ export const MambaPresence: React.FC<MambaPresenceProps> = ({
 
       {/* Label & Status */}
       {showLabel && (
-        <div className="mt-4 text-center">
-          <h2 className="text-sm font-bold font-mono tracking-widest text-slate-200">
-            {label || config.text}
-          </h2>
-          <p className="text-xs font-mono text-slate-400 mt-0.5">
-            {config.subtext}
-          </p>
+        <div className="presence-label">
+          <div className="t">{label || config.text}</div>
+          <div className="s">{config.subtext}</div>
         </div>
       )}
     </div>

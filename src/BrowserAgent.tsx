@@ -621,40 +621,39 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   return (
     <div
       id="elysia-playwright-automation-hud"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/60 backdrop-blur-2xl animate-fade-in text-left select-none"
+      className="browser-backdrop"
     >
-      <div className="relative w-full max-w-5xl h-[88vh] flex flex-col rounded-2xl border border-white/[0.06] bg-black/50 backdrop-blur-3xl shadow-[0_0_120px_rgba(13,148,136,0.12)] overflow-hidden">
-        
+      <div className="browser-panel">
+
         {/* Ambient teal/cyan glow */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(13,148,136,0.08),transparent_60%)] pointer-events-none" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(6,182,212,0.05),transparent_50%)] pointer-events-none" />
+        <div className="browser-glow" style={{ background: "radial-gradient(ellipse at top, rgba(20,184,166,0.08), transparent 60%)" }} />
+        <div className="browser-glow" style={{ background: "radial-gradient(ellipse at bottom left, rgba(6,182,212,0.05), transparent 50%)" }} />
 
         {/* ===== MINIMAL TAB BAR ===== */}
-        <div className="relative z-10 flex items-center justify-between px-3 pt-1">
-          <div className="flex items-center gap-0 overflow-x-auto scrollbar-none">
+        <div className="browser-tabbar">
+          <div className="browser-tabs">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <div
                   key={tab.id}
                   onClick={() => setActiveTabId(tab.id)}
-                  className={`group/tab relative flex items-center gap-2 px-3 py-2.5 cursor-pointer text-xs font-sans select-none transition-colors duration-150 ${
-                    isActive ? "text-white" : "text-white/30 hover:text-white/60"
-                  }`}
+                  className={`browser-tab${isActive ? " is-active" : ""}`}
                 >
                   {isActive && (
-                    <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-cyan-400 rounded-full" />
+                    <div className="tab-indicator" />
                   )}
                   {tab.isLoading && (
-                    <span className="w-3 h-3 rounded-full border-[1.5px] border-white/20 border-t-cyan-400 animate-spin shrink-0" />
+                    <span className="tab-spinner" />
                   )}
-                  <span className="truncate max-w-[100px]">{tab.title}</span>
+                  <span className="tab-title">{tab.title}</span>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleCloseTab(tab.id);
                     }}
-                    className="p-0.5 rounded opacity-0 group-hover/tab:opacity-100 text-white/30 hover:text-white/60 transition"
+                    className="browser-tab-close"
+                    aria-label={`Close tab ${tab.title}`}
                   >
                     <X size={11} />
                   </button>
@@ -663,7 +662,8 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
             })}
             <button
               onClick={() => handleNewTab()}
-              className="p-1.5 ml-0.5 text-white/30 hover:text-white/60 transition cursor-pointer shrink-0"
+              className="browser-tab-new"
+              aria-label="New tab"
             >
               <Plus size={15} />
             </button>
@@ -671,52 +671,55 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 text-white/30 hover:text-white/60 transition cursor-pointer shrink-0"
+            className="browser-close-btn"
             title="Close"
+            aria-label="Close browser"
           >
             <X size={17} />
           </button>
         </div>
 
         {/* ===== MAIN CONTENT ===== */}
-        <div className="relative z-10 flex-1 flex overflow-hidden mt-0.5">
-          <div className="flex-1 flex flex-col overflow-hidden relative group">
+        <div className="browser-main">
+          <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
 
             {/* HOME DASHBOARD */}
             {activeTab?.url === "about:blank" ? (
-              <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+              <div className="browser-home">
                 {/* Animated gradient background */}
-                <div className="absolute inset-0 bg-gradient-to-br from-black via-teal-950/20 to-cyan-950/20 pointer-events-none" />
+                <div className="browser-glow" style={{ background: "linear-gradient(to bottom right, #000, rgba(19,78,74,0.2), rgba(8,51,68,0.2))" }} />
                 <motion.div
-                  className="absolute inset-0 bg-[radial-gradient(800px_circle_at_50%_30%,rgba(13,148,136,0.06),transparent_60%)] pointer-events-none"
+                  className="browser-glow"
+                  style={{ background: "radial-gradient(800px circle at 50% 30%, rgba(20,184,166,0.06), transparent 60%)" }}
                   animate={{ opacity: [0.4, 1, 0.4] }}
                   transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
                 />
                 <motion.div
-                  className="absolute inset-0 bg-[radial-gradient(600px_circle_at_80%_70%,rgba(6,182,212,0.05),transparent_60%)] pointer-events-none"
+                  className="browser-glow"
+                  style={{ background: "radial-gradient(600px circle at 80% 70%, rgba(6,182,212,0.05), transparent 60%)" }}
                   animate={{ opacity: [1, 0.4, 1] }}
                   transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
                 />
-                
+
                 <motion.div
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="relative z-10 w-full max-w-lg px-6"
+                  className="browser-home-inner"
                 >
                   {/* Centered minimal search */}
-                  <form onSubmit={handleAddressSubmit} className="relative mb-10">
-                    <div className="flex items-center bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-full pl-5 pr-2 py-2.5 focus-within:border-cyan-500/30 focus-within:shadow-[0_0_40px_rgba(13,148,136,0.06)] transition-all duration-300">
-                      <Search size={16} className="text-white/30 shrink-0" />
+                  <form onSubmit={handleAddressSubmit} className="browser-search">
+                    <div className="browser-search-box">
+                      <Search size={16} />
                       <input
                         type="text"
                         value={inputValue}
                         onChange={(e) => setInputValue(e.target.value)}
                         placeholder="Search or enter address..."
-                        className="flex-1 bg-transparent px-3.5 py-1 text-sm text-white/80 placeholder-white/30 outline-none font-sans"
+                        className="browser-search-input"
                       />
                       <button
                         type="submit"
-                        className="px-5 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-white/50 hover:text-white/80 text-xs font-sans transition cursor-pointer"
+                        className="browser-go"
                       >
                         Go
                       </button>
@@ -724,7 +727,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                   </form>
 
                   {/* Quick links as floating pills */}
-                  <div className="flex flex-wrap justify-center gap-2.5">
+                  <div className="browser-quicklinks">
                     {[
                       { name: "YouTube", url: "https://youtube.com", icon: <Play size={12} /> },
                       { name: "Wikipedia", url: "https://wikipedia.org", icon: <BookOpen size={12} /> },
@@ -738,7 +741,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.97 }}
                         onClick={() => navigateToUrl(link.url)}
-                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] hover:border-cyan-500/20 text-xs text-white/50 hover:text-white/80 transition-all duration-200 cursor-pointer font-sans"
+                        className="browser-quicklink"
                       >
                         {link.icon}
                         {link.name}
@@ -749,24 +752,24 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               </div>
             ) : diagnosticStatus === "restricted" ? (
               /* RESTRICTED - minimal single card */
-              <div className="flex-1 flex items-center justify-center p-8">
+              <div className="browser-note-card">
                 <motion.div
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="max-w-sm w-full p-6 rounded-xl border border-white/[0.06] bg-black/40 backdrop-blur-xl text-center space-y-4"
+                  className="browser-note"
                 >
-                  <div className="mx-auto w-10 h-10 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
-                    <Shield size={18} className="text-cyan-400" />
+                  <div className="browser-note-icon">
+                    <Shield size={18} />
                   </div>
-                  <div className="space-y-1.5">
-                    <p className="text-sm font-sans text-white/80">Site can't be embedded</p>
-                    <p className="text-xs text-white/40 font-sans leading-relaxed max-w-xs mx-auto">
+                  <div>
+                    <h4>Site can't be embedded</h4>
+                    <p>
                       {getCleanTitleFromUrl(activeTab?.url || "")} blocks embedding due to security policies. Open it in your browser instead.
                     </p>
                   </div>
                   <button
                     onClick={() => window.open(activeTab?.url, "_blank", "noopener,noreferrer")}
-                    className="px-5 py-2 rounded-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 text-cyan-400 text-xs font-sans transition cursor-pointer inline-flex items-center gap-1.5"
+                    className="browser-note-btn"
                   >
                     <ExternalLink size={13} /> Open in browser
                   </button>
@@ -774,24 +777,24 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               </div>
             ) : diagnosticStatus === "error" ? (
               /* ERROR - minimal single card */
-              <div className="flex-1 flex items-center justify-center p-8">
+              <div className="browser-note-card">
                 <motion.div
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="max-w-sm w-full p-6 rounded-xl border border-white/[0.06] bg-black/40 backdrop-blur-xl text-center space-y-4"
+                  className="browser-note"
                 >
-                  <div className="mx-auto w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center">
-                    <AlertCircle size={18} className="text-rose-400" />
+                  <div className="browser-note-icon rose">
+                    <AlertCircle size={18} />
                   </div>
-                  <div className="space-y-1.5">
-                    <p className="text-sm font-sans text-white/80">Connection failed</p>
-                    <p className="text-xs text-white/40 font-sans leading-relaxed max-w-xs mx-auto">
+                  <div>
+                    <h4>Connection failed</h4>
+                    <p>
                       Unable to load {getCleanTitleFromUrl(activeTab?.url || "")}. The site may be offline or blocking access.
                     </p>
                   </div>
                   <button
                     onClick={() => window.open(activeTab?.url, "_blank", "noopener,noreferrer")}
-                    className="px-5 py-2 rounded-full bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 text-xs font-sans transition cursor-pointer inline-flex items-center gap-1.5"
+                    className="browser-note-btn rose"
                   >
                     <ExternalLink size={13} /> Open in browser
                   </button>
@@ -799,63 +802,62 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               </div>
             ) : activeTab?.url && activeTab.url.includes("youtube.com/results") ? (
               /* YOUTUBE SEARCH RESULTS */
-              <div className="flex-1 w-full h-full flex flex-col overflow-hidden relative">
-                <div className="px-6 py-3 border-b border-white/[0.06] flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-2">
-                    <Play size={13} className="text-red-500" />
-                    <span className="text-xs text-white/60 font-sans">
+              <div className="browser-yt">
+                <div className="yt-head">
+                  <div className="t">
+                    <Play size={13} style={{ color: "#ef4444" }} />
+                    <span>
                       YouTube results for &ldquo;{new URLSearchParams(activeTab.url.substring(activeTab.url.indexOf("?"))).get("search_query")}&rdquo;
                     </span>
                   </div>
                 </div>
 
                 {ytSearchLoading ? (
-                  <div className="flex-1 flex flex-col items-center justify-center gap-3">
-                    <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs text-white/30 font-sans">Loading results...</span>
+                  <div className="yt-center">
+                    <div className="yt-spinner" />
+                    <span>Loading results...</span>
                   </div>
                 ) : ytSearchError ? (
-                  <div className="flex-1 flex flex-col items-center justify-center gap-4">
-                    <AlertCircle size={20} className="text-rose-400" />
-                    <p className="text-xs text-white/50 font-sans max-w-sm text-center">{ytSearchError}</p>
-                    <button 
+                  <div className="yt-center">
+                    <AlertCircle size={20} style={{ color: "var(--rose)" }} />
+                    <p style={{ maxWidth: 380, textAlign: "center", margin: 0 }}>{ytSearchError}</p>
+                    <button
                       onClick={handleRefresh}
-                      className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-xs text-white/60 transition cursor-pointer font-sans"
+                      className="yt-retry"
                     >
                       Retry
                     </button>
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scrollbar-none">
+                  <div className="yt-grid">
                     {ytSearchResults.map((video) => (
                       <motion.div
                         key={video.videoId}
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         onClick={() => navigateToUrl(`https://youtube.com/watch?v=${video.videoId}`)}
-                        className="bg-white/[0.03] border border-white/[0.06] hover:border-red-500/20 rounded-xl overflow-hidden cursor-pointer hover:bg-white/[0.06] transition-all duration-200 group/card flex flex-col"
+                        className="yt-card"
                       >
-                        <div className="relative aspect-video bg-black overflow-hidden">
+                        <div className="yt-thumb">
                           <img
                             src={video.thumbnail}
                             alt={video.title}
                             referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover group-hover/card:scale-105 transition duration-300"
                           />
                           {video.duration && (
-                            <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-white/70 font-sans">
+                            <span className="yt-duration">
                               {video.duration}
                             </span>
                           )}
                         </div>
-                        <div className="p-3 flex flex-col gap-1.5">
-                          <h4 className="text-xs font-sans text-white/80 group-hover/card:text-red-400 transition line-clamp-2 leading-relaxed">
+                        <div className="yt-body">
+                          <h4 className="yt-title">
                             {video.title}
                           </h4>
-                          <p className="text-[11px] text-white/40 font-sans truncate">
+                          <p className="yt-author">
                             {video.author}
                           </p>
-                          <div className="flex items-center gap-2 text-[10px] text-white/30 font-sans pt-1.5 border-t border-white/[0.04]">
+                          <div className="yt-meta">
                             <span>{video.views}</span>
                             <span>·</span>
                             <span>{video.published || ""}</span>
@@ -863,12 +865,12 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                         </div>
                       </motion.div>
                     ))}
-                    
+
                     {ytSearchResults.length === 0 && (
-                      <div className="col-span-full py-16 text-center space-y-2">
-                        <Play size={18} className="mx-auto text-white/20" />
-                        <p className="text-sm text-white/30 font-sans">No results found</p>
-                        <p className="text-xs text-white/20 font-sans">Try a different search term</p>
+                      <div className="yt-center" style={{ gridColumn: "1 / -1", padding: "64px 0" }}>
+                        <Play size={18} style={{ color: "rgba(232,236,244,0.2)" }} />
+                        <p style={{ margin: 0 }}>No results found</p>
+                        <p style={{ margin: 0, fontSize: 11 }}>Try a different search term</p>
                       </div>
                     )}
                   </div>
@@ -876,72 +878,77 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               </div>
             ) : (
               /* IFRAME PORTAL */
-              <div className="flex-1 w-full h-full relative overflow-hidden">
+              <div className="browser-frame-wrap">
                 <iframe
                   ref={iframeRef}
                   src={getRenderUrl(activeTab?.url || "about:blank")}
                   onLoad={handleIframeLoadComplete}
-                  className="w-full h-full border-0 absolute inset-0 bg-black"
+                  className="browser-frame"
                   allow="autoplay; encrypted-media; fullscreen"
                 />
                 {activeTab?.isLoading && (
-                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
-                    <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs text-white/30 font-sans">Loading...</span>
+                  <div className="browser-loading">
+                    <div className="yt-spinner" />
+                    <span>Loading...</span>
                   </div>
                 )}
               </div>
             )}
 
             {/* ===== FLOATING NAV BAR ===== */}
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
-              <div className="pointer-events-auto opacity-0 hover:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/50 backdrop-blur-2xl border border-white/[0.08] shadow-xl">
+            <div className="browser-navbar">
+              <div className="browser-navbar-inner">
                 <button
                   onClick={handleBack}
                   disabled={!activeTab || activeTab.currentIndex <= 0}
-                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 disabled:hover:bg-transparent transition cursor-pointer"
+                  className="browser-navbtn"
                   title="Back"
+                  aria-label="Back"
                 >
                   <ArrowLeft size={14} />
                 </button>
                 <button
                   onClick={handleForward}
                   disabled={!activeTab || activeTab.currentIndex >= activeTab.history.length - 1}
-                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 disabled:hover:bg-transparent transition cursor-pointer"
+                  className="browser-navbtn"
                   title="Forward"
+                  aria-label="Forward"
                 >
                   <ArrowRight size={14} />
                 </button>
                 <button
                   onClick={handleRefresh}
                   disabled={!activeTab || activeTab.url === "about:blank"}
-                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition cursor-pointer"
+                  className="browser-navbtn"
                   title="Refresh"
+                  aria-label="Refresh"
                 >
-                  <RefreshCw size={13} className={activeTab?.isLoading ? "animate-spin" : ""} />
+                  <RefreshCw size={13} className={activeTab?.isLoading ? "spin" : ""} />
                 </button>
                 <button
                   onClick={() => navigateToUrl("about:blank")}
-                  className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                  className="browser-navbtn"
                   title="Home"
+                  aria-label="Home"
                 >
                   <Home size={14} />
                 </button>
-                <div className="w-px h-4 bg-white/[0.06]" />
-                <form onSubmit={handleAddressSubmit} className="flex items-center">
-                  <div className="flex items-center bg-black/30 rounded-full pl-3 pr-1">
-                    <Search size={12} className="text-white/30 shrink-0" />
+                <div className="browser-nav-divider" />
+                <form onSubmit={handleAddressSubmit} className="browser-nav-search">
+                  <div className="browser-nav-search-box">
+                    <Search size={12} />
                     <input
                       type="text"
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       placeholder="Search or enter address..."
-                      className="w-36 bg-transparent px-2 py-1 text-xs text-white/70 placeholder-white/30 outline-none font-sans"
+                      className="browser-nav-search-input"
                     />
                   </div>
                   <button
                     type="submit"
-                    className="ml-1 px-3 py-1 rounded-full bg-white/10 hover:bg-white/15 text-white/50 hover:text-white/80 text-[10px] font-sans transition cursor-pointer"
+                    className="browser-go"
+                    style={{ marginLeft: 4, padding: "4px 12px", fontSize: 10 }}
                   >
                     Go
                   </button>

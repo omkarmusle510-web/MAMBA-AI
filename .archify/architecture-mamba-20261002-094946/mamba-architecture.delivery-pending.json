@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "command": "deliver",
+  "status": "pending",
+  "receiptId": "f6532d0b-611c-4376-b512-69252c116b51",
+  "input": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\candidate.json",
+  "output": "C:\\mamba\\.archify\\architecture-mamba-20261002-094946\\mamba-architecture.html"
+}

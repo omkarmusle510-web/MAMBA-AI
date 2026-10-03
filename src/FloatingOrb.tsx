@@ -117,21 +117,14 @@ export const FloatingOrb: React.FC = () => {
 
   return (
     <div
-      className="relative flex items-center justify-center select-none bg-transparent"
+      className="orb-window"
       style={{
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
         WebkitAppRegion: "drag",
         userSelect: "none",
-        background: "transparent",
       } as React.CSSProperties}
     >
       {/* 3D Orb Visual Canvas Layer - pointer-events: none so it doesn't block window dragging from transparent areas */}
-      <div
-        className="absolute inset-0 flex items-center justify-center pointer-events-none bg-transparent"
-        style={{ width: "100%", height: "100%", overflow: "hidden" }}
-      >
+      <div className="orb-canvas-layer">
         <MambaPresence
           state={presenceState}
           variant="orb"
@@ -143,28 +136,17 @@ export const FloatingOrb: React.FC = () => {
       {/* Mic-armed indicator: visible while the wake listener is armed. */}
       {wakeArmed && (
         <div
-          className="absolute pointer-events-none"
-          style={{ bottom: 18, right: 18 }}
+          className="wake-armed-dot"
           title="Wake-word listening is on"
-        >
-          <div
-            className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"
-            style={{ boxShadow: "0 0 8px #34d399" }}
-          />
-        </div>
+        />
       )}
 
       {/* Central interactive click target right over the core and inner particle area */}
       <div
         onClick={handleClick}
+        className="orb-click-target"
         style={{
-          width: 120,
-          height: 120,
-          borderRadius: "50%",
           WebkitAppRegion: "no-drag",
-          cursor: "pointer",
-          zIndex: 10,
-          background: "transparent",
         } as React.CSSProperties}
         title="Mamba AI — Click to activate"
       />
