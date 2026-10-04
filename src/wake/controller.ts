@@ -102,6 +102,15 @@ export class WakeController {
     }
   }
 
+  /**
+   * Apply new options from the running app (Settings panel) without a restart.
+   * `start()` re-reads them, so a re-arm is enough while listening.
+   */
+  updateOptions(opts: Partial<WakeControllerOptions>): void {
+    this.opts = { ...this.opts, ...opts };
+    if (this.running) this.rearm();
+  }
+
   private handleTrigger(): void {
     // TEMP DIAG (6): trigger callback reached in the controller.
     wakeDiag(`TRIGGER callback reached in controller — notifying shell`);

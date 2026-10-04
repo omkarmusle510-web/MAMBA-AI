@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { MessageSquare, Globe, Mic, MicOff, Settings } from "lucide-react";
 
 import { MambaAudioSession, LiveState } from "./audio";
@@ -6,20 +6,12 @@ import { MambaPresence, MambaPresenceState } from "./MambaPresence";
 import { SudoPopup } from "./SudoPopup";
 import { SettingsPanel } from "./SettingsPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
+import { ThreadEntry, type TranscriptEntry } from "./ThreadEntry";
 import { Composer } from "./Composer";
 import { ToastContainer, useToast } from "./Toast";
 import { BrowserAgent } from "./BrowserAgent";
+import { motionEnabled } from "./motionPrefs";
 import { loadSettings, saveSettings, MambaSettings } from "./settingsStore";
-
-interface TranscriptEntry {
-  id: string;
-  timestamp: string;
-  role: "user" | "model";
-  content: string;
-  isError?: boolean;
-  // Provisional Phase 4 streaming bubble: text is incremental output only.
-  streaming?: boolean;
-}
 
 const newEntryId = () => Math.random().toString(36).substring(2, 9);
 
@@ -48,9 +40,10 @@ export const MambaApp: React.FC = () => {
 
   // Sudo / Permission Requests from Mamba
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [permissionReason, setPermissionReason] = useState<string>("");
 
   // Toast notifications hook
-  const { toasts, addToast, dismiss } = useToast(6000);
+  const { toasts, addToast, dismiss, pause, resume } = useToast();
 
   // Audio session ref (wake detection lives in the orb renderer — see src/wake/)
   const audioSessionRef = useRef<MambaAudioSession | null>(null);
@@ -134,12 +127,10 @@ export const MambaApp: React.FC = () => {
     addToast("Cancelling current turn…", "info");
   };
 
-  // Sync liveState to desktop shell (for Floating Orb synchronization)
-  useEffect(() => {
-    if (window.mambaDesktop?.reportState) {
-      window.mambaDesktop.reportState(liveState);
-    }
-  }, [liveState]);
+  // Derived Orb phase: which part of the turn Mamba is in. Presentation only —
+  // it reads milestones the transport already transmits and never changes
+  // LiveState, the transport, or the shell's busy detection.
+  const [orbPhase, setOrbPhase] = useState<"executing" | "verifying" | null>(null);
 
   // Keep the persisted settings mirror in sync with the OS startup registration.
   useEffect(() => {
@@ -155,6 +146,23 @@ export const MambaApp: React.FC = () => {
       /* non-desktop context — nothing to sync */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Window modes: a resized window is the same product with less, not a second
+  // design (Spec §19). One state object, one resize listener, two CSS modifiers.
+  const [winMode, setWinMode] = useState(() => ({
+    compact: window.innerWidth <= 720,
+    short: window.innerHeight <= 620,
+  }));
+
+  useEffect(() => {
+    const onResize = () =>
+      setWinMode({
+        compact: window.innerWidth <= 720,
+        short: window.innerHeight <= 620,
+      });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const runVoiceTurn = () => {
@@ -232,6 +240,8 @@ export const MambaApp: React.FC = () => {
     const session = new MambaAudioSession({
       onStateChange: (state) => {
         setLiveState(state);
+        // A turn phase only lives inside "thinking" — anything else ends it.
+        if (state !== "thinking") setOrbPhase(null);
         // A voice session requested before the transport connected starts now.
         if (state === "idle" && pendingTurnRef.current) {
           pendingTurnRef.current = false;
@@ -252,6 +262,7 @@ export const MambaApp: React.FC = () => {
           return;
         }
         // The model transcription is the authoritative turn result.
+        setOrbPhase(null);
         if (streamEntryIdRef.current) {
           finalizeStreamWith(text);
         } else {
@@ -264,16 +275,22 @@ export const MambaApp: React.FC = () => {
       onDelta: appendDelta,
       onCancelled: () => {
         discardStream();
+        setOrbPhase(null);
         addToast("Turn cancelled.", "info");
       },
       onTurnComplete: () => {
         userEchoRef.current = null;
+        setOrbPhase(null);
         // Reached without an authoritative model text (e.g. the turn stopped
         // at an approval prompt): provisional deltas are not an answer.
         discardStream();
       },
       onProgress: (milestone) => {
         addToast(milestone, "milestone");
+        const m = milestone.toLowerCase();
+        if (m.startsWith("executing")) setOrbPhase("executing");
+        else if (m.startsWith("verifying")) setOrbPhase("verifying");
+        else if (m.startsWith("planning") || m.startsWith("understanding")) setOrbPhase(null);
       },
       onPermissionRequest: (command, reason) => {
         const req = {
@@ -284,12 +301,17 @@ export const MambaApp: React.FC = () => {
           expiresAt: new Date(Date.now() + 60000),
           status: "pending" as const,
         };
+        setPermissionReason(reason || "");
         setPendingRequests([req]);
-        addToast(`Permission needed: ${reason}`, "reminder");
+        addToast(
+          reason ? `Permission needed: ${reason}` : "Permission needed",
+          "reminder"
+        );
       },
       onError: (err) => {
         // A failed turn is a failure, not partially streamed success.
         discardStream();
+        setOrbPhase(null);
         addToast(err, "error");
         setLiveState("error");
       },
@@ -383,6 +405,41 @@ export const MambaApp: React.FC = () => {
     );
   };
 
+  // Wake-word phrase and sensitivity live in the orb renderer's controller, so
+  // a change is persisted locally and forwarded over the bridge; the controller
+  // rearms with the new options.
+  const handleWakePhraseChange = (phrase: string) => {
+    setSettings(saveSettings({ wakePhrase: phrase }));
+    try {
+      window.mambaDesktop?.notifyWakeOptions?.({ phrase });
+    } catch {
+      /* non-desktop context */
+    }
+    addToast(`Wake phrase set to "${phrase}".`, "info");
+  };
+
+  const handleSensitivityChange = (sensitivity: number) => {
+    setSettings(saveSettings({ sensitivity }));
+    try {
+      window.mambaDesktop?.notifyWakeOptions?.({ sensitivity });
+    } catch {
+      /* non-desktop context */
+    }
+  };
+
+  // Motion is read from the store by each surface as it renders, so the change
+  // is broadcast for the next render rather than threaded through new state.
+  const handleAnimationsChange = (enabled: boolean) => {
+    setSettings(saveSettings({ animations: enabled }));
+    window.dispatchEvent(new Event("mamba:settings-changed"));
+    addToast(
+      enabled
+        ? "Motion enabled."
+        : "Motion reduced — takes effect on the next interaction.",
+      "info"
+    );
+  };
+
   // Handle text message submission
   const handleMessageSubmit = (message: string) => {
     if (!message.trim()) return;
@@ -419,33 +476,75 @@ export const MambaApp: React.FC = () => {
       ? "listening"
       : "idle";
 
-  // Subtle status caption for the stage (the orb itself stays label-free).
+  // The Orb shows the derived turn phase while Mamba is thinking. The
+  // transport's own state always wins otherwise, so `permission` cannot be
+  // overwritten by a stale phase.
+  const displayState = orbPhase && liveState === "thinking" ? orbPhase : liveState;
+  const orbState: MambaPresenceState =
+    orbPhase && liveState === "thinking" ? orbPhase : presenceState;
+
+  // Sync the Orb state to the desktop shell (Floating Orb synchronisation).
+  // Transport-only states pass through unmapped: the orb ignores them today and
+  // calling "connecting" idle would misreport startup as quiet.
+  useEffect(() => {
+    if (!window.mambaDesktop?.reportState) return;
+    window.mambaDesktop.reportState(
+      liveState === "connecting" || liveState === "disconnected" ? liveState : orbState
+    );
+  }, [orbState, liveState]);
+
+  // Quiet status caption for the stage (the orb itself stays label-free).
+  // Copy is outcome-first: never a model, provider, agent or tool name.
   const statusCopy: Record<string, { text: string; hint: string; pill: string }> = {
     idle: {
       text: "Ready",
       hint: settings.wakeWordEnabled
-        ? `Say "${settings.wakePhrase || "hey mamba"}" or click the orb`
-        : "Click the orb or type below",
+        ? `Say "${settings.wakePhrase || "hey mamba"}" or just start typing`
+        : "Ask Mamba anything below",
       pill: "",
     },
-    listening: { text: "Listening", hint: "Speak your command", pill: "is-listening" },
-    thinking: { text: "Thinking", hint: "Planning & reasoning", pill: "is-thinking" },
-    speaking: { text: "Speaking", hint: "Responding", pill: "is-speaking" },
-    permission: { text: "Approval needed", hint: "Review the request to continue", pill: "is-permission" },
-    error: { text: "Something went wrong", hint: "Check the connection and try again", pill: "is-error" },
-    connecting: { text: "Connecting", hint: "Starting transport", pill: "" },
-    disconnected: { text: "Disconnected", hint: "Restart the backend to reconnect", pill: "is-error" },
+    listening: { text: "Listening…", hint: "Go ahead", pill: "is-listening" },
+    thinking: { text: "Thinking…", hint: "Working through it", pill: "is-thinking" },
+    executing: { text: "Working…", hint: "Getting it done", pill: "is-executing" },
+    verifying: { text: "Checking…", hint: "Making sure it worked", pill: "is-verifying" },
+    speaking: { text: "Speaking…", hint: "Answering out loud", pill: "is-speaking" },
+    permission: { text: "Needs your approval", hint: "Review the request", pill: "is-permission" },
+    error: { text: "Something went wrong", hint: "Try again in a moment", pill: "is-error" },
+    connecting: { text: "Starting up…", hint: "", pill: "" },
+    disconnected: { text: "Not connected", hint: "Restart Mamba to reconnect", pill: "is-error" },
   };
-  const status = statusCopy[liveState] ?? statusCopy.idle;
+  const status = statusCopy[displayState] ?? statusCopy.idle;
+
+  // The stage carries at most the last authoritative answer — never provisional
+  // deltas, which are the transcript rail's job while they are still arriving.
+  const latestAnswer = useMemo(() => {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const e = transcript[i];
+      if (e.role === "model" && !e.streaming) return e;
+    }
+    return null;
+  }, [transcript]);
+
+  const modeClass = `${winMode.compact ? " is-compact" : ""}${
+    winMode.short ? " is-short" : ""
+  }`;
 
   return (
-    <div className="mamba-shell">
+    <div
+      className={`mamba-shell${motionEnabled(settings.animations) ? "" : " no-motion"}${modeClass}`}
+    >
       {/* Notifications */}
-      <ToastContainer toasts={toasts} onDismiss={dismiss} />
+      <ToastContainer
+        toasts={toasts}
+        onDismiss={dismiss}
+        onPause={pause}
+        onResume={resume}
+      />
 
       {/* Permission Confirmation Modal */}
       <SudoPopup
         pendingRequests={pendingRequests}
+        reason={permissionReason}
         onApprove={handleApprove}
         onReject={handleReject}
       />
@@ -454,12 +553,17 @@ export const MambaApp: React.FC = () => {
       <SettingsPanel
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        isDesktop={Boolean(window.mambaDesktop?.isDesktop)}
         autoStart={autoStart}
         onAutoStartChange={handleAutoStartChange}
-        isDesktop={Boolean(window.mambaDesktop?.isDesktop)}
+        animations={settings.animations !== false}
+        onAnimationsChange={handleAnimationsChange}
         wakeWordEnabled={settings.wakeWordEnabled !== false}
-        wakePhrase={settings.wakePhrase || "hey mamba"}
         onWakeWordChange={handleWakeWordChange}
+        wakePhrase={settings.wakePhrase || "hey mamba"}
+        onWakePhraseChange={handleWakePhraseChange}
+        sensitivity={settings.sensitivity}
+        onSensitivityChange={handleSensitivityChange}
       />
 
       {/* Header */}
@@ -535,10 +639,7 @@ export const MambaApp: React.FC = () => {
           }}
         >
           <MambaPresence
-            state={presenceState}
-            variant="orb"
-            size={260}
-            showLabel={false}
+            state={orbState}
             inputNode={audioSessionRef.current?.inputAnalyser}
             outputNode={audioSessionRef.current?.outputAnalyser}
           />
@@ -547,6 +648,18 @@ export const MambaApp: React.FC = () => {
           <div className="status-text">{status.text}</div>
           <div className="status-hint">{status.hint}</div>
         </div>
+        {latestAnswer && (
+          <div className="stage-answer">
+            <ThreadEntry entry={latestAnswer} variant="stage" defaultExpanded={false} />
+            <button
+              type="button"
+              className="thread-more btn btn-ghost"
+              onClick={() => setIsTranscriptOpen(true)}
+            >
+              View details
+            </button>
+          </div>
+        )}
       </main>
 
       {/* Bottom composer */}
@@ -559,12 +672,7 @@ export const MambaApp: React.FC = () => {
           onCancelTurn={cancelTurn}
           disabled={liveState === "disconnected" || liveState === "connecting"}
         />
-        <div className="composer-hint">
-          {settings.wakeWordEnabled
-            ? `Wake word "${settings.wakePhrase || "hey mamba"}" is on`
-            : "Wake word is off"}
-          {" · "}Enter to send, Shift+Enter for a new line
-        </div>
+        <div className="composer-hint">Enter to send · Shift+Enter for a new line</div>
       </footer>
 
       {/* Transcript Panel */}
@@ -572,6 +680,8 @@ export const MambaApp: React.FC = () => {
         entries={transcript}
         isOpen={isTranscriptOpen}
         onClose={() => setIsTranscriptOpen(false)}
+        onClear={() => setTranscript([])}
+        animations={settings.animations !== false}
       />
 
       {/* Browser Viewport Modal */}

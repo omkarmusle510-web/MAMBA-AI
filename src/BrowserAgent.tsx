@@ -1,36 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
-import { 
-  X, 
-  ExternalLink, 
-  Cpu, 
-  CheckCircle, 
-  AlertCircle, 
-  Terminal, 
-  Copy, 
-  Check, 
-  Layers, 
-  Globe, 
-  RefreshCw, 
+import {
+  X,
+  ExternalLink,
+  AlertCircle,
+  Layers,
+  Globe,
+  RefreshCw,
   ArrowLeft,
   ArrowRight,
   Home,
   Plus,
-  Search,
-  Monitor,
   Play,
-  Volume2,
-  Maximize,
   Sparkles,
   Shield,
   BookOpen
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-
-interface LogItem {
-  id: string;
-  text: string;
-  type: "info" | "success" | "error" | "action";
-}
+import { motion } from "motion/react";
+import { motionEnabled } from "./motionPrefs";
+import { loadSettings } from "./settingsStore";
 
 interface Tab {
   id: string;
@@ -45,7 +32,6 @@ interface Tab {
 interface BrowserAgentProps {
   url: string;
   onClose: () => void;
-  onActionComplete?: (result: any) => void;
   actionTrigger?: {
     type: string;
     args: any;
@@ -64,25 +50,17 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   const [activeTabId, setActiveTabId] = useState<string>("");
   const [inputValue, setInputValue] = useState<string>("");
 
-  // Playwright Local Server status states (retained for backward compatibility)
-  const [isLocalConnected, setIsLocalConnected] = useState<boolean>(false);
-  const [localLogs, setLocalLogs] = useState<LogItem[]>([]);
-  const [showLocalConsole, setShowLocalConsole] = useState<boolean>(false);
-  const [copiedSection, setCopiedSection] = useState<string | null>(null);
-
-  // Active Developer Debug Parameters
+  // Load outcome shown by the embedded view (secure / restricted / error / …)
   const [diagnosticReason, setDiagnosticReason] = useState<string | null>(null);
   const [diagnosticStatus, setDiagnosticStatus] = useState<"secure" | "restricted" | "error" | "analyzing" | "blank">("blank");
-  const [jsErrors, setJsErrors] = useState<string[]>([]);
-  const [networkErrors, setNetworkErrors] = useState<string[]>([]);
   const [loadTimeMs, setLoadTimeMs] = useState<number>(0);
-  const [showDebugPanel, setShowDebugPanel] = useState<boolean>(true); // Active by default to display stats instantly
-  const [iframeOnLoadCount, setIframeOnLoadCount] = useState<number>(0);
 
   // YouTube Live results states
   const [ytSearchResults, setYtSearchResults] = useState<any[]>([]);
   const [ytSearchLoading, setYtSearchLoading] = useState<boolean>(false);
   const [ytSearchError, setYtSearchError] = useState<string | null>(null);
+
+  const animate = motionEnabled(loadSettings().animations);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const loadStartRef = useRef<number>(0);
@@ -222,27 +200,11 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
   }, [activeTabId, activeTab?.url]);
 
 
-  // Set hook error context on iframe document
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (iframe && iframe.contentWindow) {
-      try {
-        iframe.contentWindow.onerror = (message, source, lineno, colno, error) => {
-          const errMsg = `${message} (Line ${lineno}:${colno}) at ${source}`;
-          setJsErrors(prev => [...prev.slice(-15), errMsg]);
-          return false;
-        };
-      } catch (err) {
-        // Cross origin issues (or sandbox restrictions) might block accessing contentWindow properties
-      }
-    }
-  }, [activeTab?.url]);
-
   // Handle click interceptions from children iframe inside proxy
   useEffect(() => {
     const handleNavigationMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === "NAVIGATE" && event.data.url) {
-        console.log("[Elysia Browser] Same-origin child iframe navigated to:", event.data.url);
+        console.log("[Mamba Browser] Same-origin child iframe navigated to:", event.data.url);
         navigateToUrl(event.data.url);
       }
     };
@@ -255,7 +217,7 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     if (!actionTrigger) return;
 
     const { type, args, callback } = actionTrigger;
-    console.log(`[Elysia Browser Hub] Automated Voice Trigger: ${type}`, args);
+    console.log(`[Mamba Browser] Automated Voice Trigger: ${type}`, args);
 
     const runVoiceAutomation = async () => {
       try {
@@ -484,8 +446,8 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
       setDiagnosticReason(restrictions.reason);
       try {
         window.open(finalUrl, "_blank", "noopener,noreferrer");
-      } catch (err: any) {
-        setNetworkErrors(prev => [...prev, "System pop-up blocker intercepted redirection search."]);
+      } catch {
+        /* blocked by the system pop-up handler — the card still offers a link */
       }
     }
   };
@@ -587,7 +549,6 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
       const dur = Date.now() - loadStartRef.current;
       setLoadTimeMs(dur);
       setDiagnosticStatus("secure");
-      setIframeOnLoadCount(prev => prev + 1);
 
       setTabs(prev => prev.map(t => t.id === activeTabId ? {
         ...t,
@@ -603,7 +564,6 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
           if (bodyTxt.includes("Elysia Web Proxy Error") || bodyTxt.includes("Failed loading remote website")) {
             setDiagnosticStatus("error");
             setDiagnosticReason(bodyTxt);
-            setNetworkErrors(prev => [...prev, "Proxy server failed to resolve target host."]);
           }
         }
       } catch (err) {
@@ -612,24 +572,11 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
     }
   };
 
-  const copyToClipboard = (text: string, identifier: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedSection(identifier);
-    setTimeout(() => setCopiedSection(null), 2000);
-  };
-
   return (
-    <div
-      id="elysia-playwright-automation-hud"
-      className="browser-backdrop"
-    >
+    <div id="mamba-browser-surface" className="browser-backdrop">
       <div className="browser-panel">
 
-        {/* Ambient teal/cyan glow */}
-        <div className="browser-glow" style={{ background: "radial-gradient(ellipse at top, rgba(20,184,166,0.08), transparent 60%)" }} />
-        <div className="browser-glow" style={{ background: "radial-gradient(ellipse at bottom left, rgba(6,182,212,0.05), transparent 50%)" }} />
-
-        {/* ===== MINIMAL TAB BAR ===== */}
+        {/* ===== TABS ===== */}
         <div className="browser-tabbar">
           <div className="browser-tabs">
             {tabs.map((tab) => {
@@ -668,78 +615,110 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
               <Plus size={15} />
             </button>
           </div>
+        </div>
+
+        {/* ===== ADDRESS TOOLBAR ===== */}
+        <div className="browser-toolbar">
+          <button
+            onClick={handleBack}
+            disabled={!activeTab || activeTab.currentIndex <= 0}
+            className="icon-btn"
+            title="Back"
+            aria-label="Back"
+          >
+            <ArrowLeft />
+          </button>
+          <button
+            onClick={handleForward}
+            disabled={!activeTab || activeTab.currentIndex >= activeTab.history.length - 1}
+            className="icon-btn"
+            title="Forward"
+            aria-label="Forward"
+          >
+            <ArrowRight />
+          </button>
+          <button
+            onClick={handleRefresh}
+            disabled={!activeTab || activeTab.url === "about:blank"}
+            className="icon-btn"
+            title="Reload"
+            aria-label="Reload"
+          >
+            <RefreshCw className={activeTab?.isLoading ? "spin" : ""} />
+          </button>
+          <button
+            onClick={() => navigateToUrl("about:blank")}
+            className="icon-btn"
+            title="Home"
+            aria-label="Home"
+          >
+            <Home />
+          </button>
+
+          <form onSubmit={handleAddressSubmit} className="browser-address-form">
+            <input
+              type="text"
+              className="field browser-address"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="Search or enter address"
+              aria-label="Search or enter address"
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </form>
 
           <button
             onClick={onClose}
-            className="browser-close-btn"
-            title="Close"
+            className="icon-btn"
+            title="Close browser"
             aria-label="Close browser"
           >
-            <X size={17} />
+            <X />
           </button>
         </div>
 
         {/* ===== MAIN CONTENT ===== */}
         <div className="browser-main">
-          <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
+          <div className="browser-viewport">
 
             {/* HOME DASHBOARD */}
             {activeTab?.url === "about:blank" ? (
               <div className="browser-home">
-                {/* Animated gradient background */}
-                <div className="browser-glow" style={{ background: "linear-gradient(to bottom right, #000, rgba(19,78,74,0.2), rgba(8,51,68,0.2))" }} />
                 <motion.div
-                  className="browser-glow"
-                  style={{ background: "radial-gradient(800px circle at 50% 30%, rgba(20,184,166,0.06), transparent 60%)" }}
-                  animate={{ opacity: [0.4, 1, 0.4] }}
-                  transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-                />
-                <motion.div
-                  className="browser-glow"
-                  style={{ background: "radial-gradient(600px circle at 80% 70%, rgba(6,182,212,0.05), transparent 60%)" }}
-                  animate={{ opacity: [1, 0.4, 1] }}
-                  transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-                />
-
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
                   className="browser-home-inner"
+                  initial={animate ? { opacity: 0 } : false}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: animate ? 0.28 : 0, ease: [0.16, 1, 0.3, 1] }}
                 >
-                  {/* Centered minimal search */}
                   <form onSubmit={handleAddressSubmit} className="browser-search">
-                    <div className="browser-search-box">
-                      <Search size={16} />
-                      <input
-                        type="text"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        placeholder="Search or enter address..."
-                        className="browser-search-input"
-                      />
-                      <button
-                        type="submit"
-                        className="browser-go"
-                      >
-                        Go
-                      </button>
-                    </div>
+                    <input
+                      type="text"
+                      className="field browser-search-input"
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      placeholder="Search or enter address"
+                      aria-label="Search or enter address"
+                      spellCheck={false}
+                      autoComplete="off"
+                      autoFocus
+                    />
                   </form>
 
-                  {/* Quick links as floating pills */}
+                  <div className="label browser-group-caption">Quick links</div>
                   <div className="browser-quicklinks">
                     {[
                       { name: "YouTube", url: "https://youtube.com", icon: <Play size={12} /> },
                       { name: "Wikipedia", url: "https://wikipedia.org", icon: <BookOpen size={12} /> },
-                      { name: "Google", url: "https://google.com", icon: <Search size={12} /> },
+                      { name: "Google", url: "https://google.com", icon: <Globe size={12} /> },
                       { name: "ChatGPT", url: "https://chatgpt.com", icon: <Sparkles size={12} /> },
                       { name: "Gmail", url: "https://gmail.com", icon: <Layers size={12} /> },
                       { name: "DuckDuckGo", url: "https://duckduckgo.com", icon: <Shield size={12} /> },
                     ].map((link) => (
                       <motion.button
                         key={link.name}
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.97 }}
+                        whileHover={animate ? { scale: 1.03 } : undefined}
+                        whileTap={animate ? { scale: 0.98 } : undefined}
                         onClick={() => navigateToUrl(link.url)}
                         className="browser-quicklink"
                       >
@@ -751,18 +730,19 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                 </motion.div>
               </div>
             ) : diagnosticStatus === "restricted" ? (
-              /* RESTRICTED - minimal single card */
+              /* RESTRICTED — the site refuses to be embedded */
               <div className="browser-note-card">
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="browser-note"
+                  className="browser-note surface"
+                  initial={animate ? { opacity: 0 } : false}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: animate ? 0.28 : 0, ease: [0.16, 1, 0.3, 1] }}
                 >
                   <div className="browser-note-icon">
                     <Shield size={18} />
                   </div>
                   <div>
-                    <h4>Site can't be embedded</h4>
+                    <h4>Site can&apos;t be embedded</h4>
                     <p>
                       {getCleanTitleFromUrl(activeTab?.url || "")} blocks embedding due to security policies. Open it in your browser instead.
                     </p>
@@ -776,14 +756,15 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                 </motion.div>
               </div>
             ) : diagnosticStatus === "error" ? (
-              /* ERROR - minimal single card */
+              /* ERROR — the proxy could not resolve the page */
               <div className="browser-note-card">
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="browser-note"
+                  className="browser-note surface"
+                  initial={animate ? { opacity: 0 } : false}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: animate ? 0.28 : 0, ease: [0.16, 1, 0.3, 1] }}
                 >
-                  <div className="browser-note-icon rose">
+                  <div className="browser-note-icon is-danger">
                     <AlertCircle size={18} />
                   </div>
                   <div>
@@ -794,18 +775,18 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                   </div>
                   <button
                     onClick={() => window.open(activeTab?.url, "_blank", "noopener,noreferrer")}
-                    className="browser-note-btn rose"
+                    className="browser-note-btn is-danger"
                   >
                     <ExternalLink size={13} /> Open in browser
                   </button>
                 </motion.div>
               </div>
             ) : activeTab?.url && activeTab.url.includes("youtube.com/results") ? (
-              /* YOUTUBE SEARCH RESULTS */
+              /* YOUTUBE SEARCH RESULTS — rendered from the search API */
               <div className="browser-yt">
                 <div className="yt-head">
-                  <div className="t">
-                    <Play size={13} style={{ color: "#ef4444" }} />
+                  <div className="yt-head-line">
+                    <Play size={13} />
                     <span>
                       YouTube results for &ldquo;{new URLSearchParams(activeTab.url.substring(activeTab.url.indexOf("?"))).get("search_query")}&rdquo;
                     </span>
@@ -819,8 +800,8 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                   </div>
                 ) : ytSearchError ? (
                   <div className="yt-center">
-                    <AlertCircle size={20} style={{ color: "var(--rose)" }} />
-                    <p style={{ maxWidth: 380, textAlign: "center", margin: 0 }}>{ytSearchError}</p>
+                    <AlertCircle size={20} />
+                    <p className="yt-message">{ytSearchError}</p>
                     <button
                       onClick={handleRefresh}
                       className="yt-retry"
@@ -833,8 +814,9 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                     {ytSearchResults.map((video) => (
                       <motion.div
                         key={video.videoId}
-                        initial={{ opacity: 0, y: 8 }}
+                        initial={animate ? { opacity: 0, y: 8 } : false}
                         animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: animate ? 0.28 : 0, ease: [0.16, 1, 0.3, 1] }}
                         onClick={() => navigateToUrl(`https://youtube.com/watch?v=${video.videoId}`)}
                         className="yt-card"
                       >
@@ -867,10 +849,10 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                     ))}
 
                     {ytSearchResults.length === 0 && (
-                      <div className="yt-center" style={{ gridColumn: "1 / -1", padding: "64px 0" }}>
-                        <Play size={18} style={{ color: "rgba(232,236,244,0.2)" }} />
-                        <p style={{ margin: 0 }}>No results found</p>
-                        <p style={{ margin: 0, fontSize: 11 }}>Try a different search term</p>
+                      <div className="yt-center yt-empty">
+                        <Play size={18} />
+                        <p>No results found</p>
+                        <p className="yt-message">Try a different search term</p>
                       </div>
                     )}
                   </div>
@@ -894,67 +876,6 @@ export const BrowserAgent: React.FC<BrowserAgentProps> = ({
                 )}
               </div>
             )}
-
-            {/* ===== FLOATING NAV BAR ===== */}
-            <div className="browser-navbar">
-              <div className="browser-navbar-inner">
-                <button
-                  onClick={handleBack}
-                  disabled={!activeTab || activeTab.currentIndex <= 0}
-                  className="browser-navbtn"
-                  title="Back"
-                  aria-label="Back"
-                >
-                  <ArrowLeft size={14} />
-                </button>
-                <button
-                  onClick={handleForward}
-                  disabled={!activeTab || activeTab.currentIndex >= activeTab.history.length - 1}
-                  className="browser-navbtn"
-                  title="Forward"
-                  aria-label="Forward"
-                >
-                  <ArrowRight size={14} />
-                </button>
-                <button
-                  onClick={handleRefresh}
-                  disabled={!activeTab || activeTab.url === "about:blank"}
-                  className="browser-navbtn"
-                  title="Refresh"
-                  aria-label="Refresh"
-                >
-                  <RefreshCw size={13} className={activeTab?.isLoading ? "spin" : ""} />
-                </button>
-                <button
-                  onClick={() => navigateToUrl("about:blank")}
-                  className="browser-navbtn"
-                  title="Home"
-                  aria-label="Home"
-                >
-                  <Home size={14} />
-                </button>
-                <div className="browser-nav-divider" />
-                <form onSubmit={handleAddressSubmit} className="browser-nav-search">
-                  <div className="browser-nav-search-box">
-                    <Search size={12} />
-                    <input
-                      type="text"
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
-                      placeholder="Search or enter address..."
-                      className="browser-nav-search-input"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="browser-go"
-                    style={{ marginLeft: 4, padding: "4px 12px", fontSize: 10 }}
-                  >
-                    Go
-                  </button>
-                </form>
-              </div>
-            </div>
 
           </div>
         </div>

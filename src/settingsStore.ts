@@ -17,32 +17,18 @@ export interface MambaSettings {
   wakeWordEnabled: boolean;
   /** Phrase that activates Mamba (case-insensitive substring match). */
   wakePhrase: string;
-  /** Preferred microphone device id ("" = system default). */
-  micDeviceId: string;
   /** Wake-word sensitivity: 0 (strict) .. 100 (loose). Affects debounce window. */
   sensitivity: number;
   /** Master toggle for UI animations. */
   animations: boolean;
-  /** Selected voice name. */
-  voice: string;
-  /** Background theme style. */
-  backgroundVideo: string;
-  /** Presence visual style ("orb", "pulse", or "character"). */
-  avatarStyle: "character" | "orb" | "pulse";
 }
-
-export type ElysiaSettings = MambaSettings;
 
 export const DEFAULT_SETTINGS: MambaSettings = {
   autoStart: false,
   wakeWordEnabled: true,
   wakePhrase: "hey mamba",
-  micDeviceId: "",
   sensitivity: 60,
   animations: true,
-  voice: "default",
-  backgroundVideo: "solid",
-  avatarStyle: "pulse",
 };
 
 const STORAGE_KEY = "mamba.settings.v1";
@@ -50,17 +36,34 @@ const STORAGE_KEY = "mamba.settings.v1";
 /** Settings keys that the browser should never persist (security). */
 const NEVER_PERSIST: ReadonlySet<keyof MambaSettings> = new Set([]);
 
+const KNOWN_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof MambaSettings)[];
+
+/**
+ * Merge over defaults keeping only the keys Mamba actually reads, so a payload
+ * written by an older build cannot resurrect a setting that has been removed.
+ */
+function merge(overrides: Partial<MambaSettings> | null): MambaSettings {
+  const next: MambaSettings = { ...DEFAULT_SETTINGS };
+  if (!overrides) return next;
+  KNOWN_KEYS.forEach((key) => {
+    const value = overrides[key];
+    if (value !== undefined && value !== null) {
+      (next as unknown as Record<string, unknown>)[key] = value;
+    }
+  });
+  return next;
+}
+
 /**
  * Load settings from localStorage, merged over defaults so new keys always
  * have a sane value even when an older payload is present.
  */
-export function loadSettings(): ElysiaSettings {
+export function loadSettings(): MambaSettings {
   if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<ElysiaSettings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    return merge(JSON.parse(raw) as Partial<MambaSettings>);
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -70,14 +73,14 @@ export function loadSettings(): ElysiaSettings {
  * Persist a full or partial settings update to localStorage.
  * Returns the fully merged settings object.
  */
-export function saveSettings(patch: Partial<ElysiaSettings>): ElysiaSettings {
+export function saveSettings(patch: Partial<MambaSettings>): MambaSettings {
   const current = loadSettings();
-  const next: ElysiaSettings = { ...current, ...patch };
+  const next: MambaSettings = merge({ ...current, ...patch });
   if (typeof window !== "undefined") {
     try {
       // Strip any sensitive keys before writing to localStorage.
       const safe: Record<string, unknown> = {};
-      (Object.keys(next) as (keyof ElysiaSettings)[]).forEach((k) => {
+      (Object.keys(next) as (keyof MambaSettings)[]).forEach((k) => {
         if (!NEVER_PERSIST.has(k)) safe[k] = next[k];
       });
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(safe));
@@ -91,7 +94,7 @@ export function saveSettings(patch: Partial<ElysiaSettings>): ElysiaSettings {
 }
 
 /** Push settings to the backend (server.ts persists to settings.json). */
-async function syncSettingsToBackend(settings: ElysiaSettings): Promise<void> {
+async function syncSettingsToBackend(settings: MambaSettings): Promise<void> {
   try {
     await fetch("/api/settings", {
       method: "POST",

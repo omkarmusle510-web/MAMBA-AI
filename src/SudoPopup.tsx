@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { Shield, Check, X, Terminal, Clock, AlertCircle } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { motionEnabled } from "./motionPrefs";
+import { loadSettings } from "./settingsStore";
 
 interface SudoRequest {
   id: string;
@@ -16,50 +17,100 @@ interface SudoPopupProps {
   onApprove?: (token: string) => void;
   onReject?: (token: string) => void;
   pendingRequests?: SudoRequest[];
+  /** Why Mamba wants this — shown instead of a generic warning. */
+  reason?: string;
 }
+
+const FALLBACK_EXPLANATION = "Mamba wants to do this before it can continue.";
+const RISK_LINE = "This runs on your machine, outside Mamba. Allow it only if you were expecting it.";
 
 export const SudoPopup: React.FC<SudoPopupProps> = ({
   onApprove,
   onReject,
   pendingRequests = [],
+  reason,
 }) => {
   const [selectedRequest, setSelectedRequest] = useState<SudoRequest | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(0);
-  const [dots, setDots] = useState<string>(".");
+  const [expired, setExpired] = useState<boolean>(false);
+  const denyRef = useRef<HTMLButtonElement>(null);
+  const approveRef = useRef<HTMLButtonElement>(null);
 
-  const hasPending = pendingRequests.length > 0;
   const showDialog = selectedRequest !== null;
+  const animate = motionEnabled(loadSettings().animations);
 
+  const handleApprove = () => {
+    if (!selectedRequest || expired) return;
+    onApprove?.(selectedRequest.id);
+    setSelectedRequest(null);
+  };
+
+  const handleReject = () => {
+    if (!selectedRequest || expired) return;
+    onReject?.(selectedRequest.id);
+    setSelectedRequest(null);
+  };
+
+  // Compared by object identity, not by "nothing is selected": an expired
+  // request stays on screen, and a new one must still replace it.
   useEffect(() => {
-    if (!selectedRequest) return;
-    const updateTimer = () => {
-      const now = new Date();
-      const diff = Math.max(0, selectedRequest.expiresAt.getTime() - now.getTime());
-      setTimeLeft(Math.floor(diff / 1000));
-    };
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-    return () => clearInterval(interval);
+    const next = pendingRequests[0] ?? null;
+    setSelectedRequest((current) => (current === next ? current : next));
+  }, [pendingRequests]);
+
+  // The countdown ends when the request does: the timer stops rather than
+  // parking at `0s`, and nothing is sent on the user's behalf either way.
+  useEffect(() => {
+    const request = selectedRequest;
+    if (!request) return;
+
+    const remaining = () =>
+      Math.max(0, Math.ceil((request.expiresAt.getTime() - Date.now()) / 1000));
+
+    const first = remaining();
+    setTimeLeft(first);
+    setExpired(first <= 0);
+    if (first <= 0) return;
+
+    const timer = window.setInterval(() => {
+      const left = remaining();
+      setTimeLeft(left);
+      if (left <= 0) {
+        setExpired(true);
+        window.clearInterval(timer);
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
   }, [selectedRequest]);
 
   useEffect(() => {
-    if (hasPending && !selectedRequest) {
-      setSelectedRequest(pendingRequests[0]);
-    } else if (!hasPending && selectedRequest) {
-      setSelectedRequest(null);
-    }
-  }, [hasPending, pendingRequests, selectedRequest]);
+    if (!selectedRequest) return;
+    denyRef.current?.focus();
 
-  useEffect(() => {
-    if (!showDialog) return;
-    const interval = setInterval(() => {
-      setDots((prev) => (prev.length >= 3 ? "." : prev + "."));
-    }, 500);
-    return () => {
-      clearInterval(interval);
-      setDots(".");
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleReject();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const targets = [denyRef.current, approveRef.current].filter(
+        (el): el is HTMLButtonElement => el !== null && !el.disabled
+      );
+      event.preventDefault();
+      if (targets.length === 0) return;
+
+      const index = targets.indexOf(document.activeElement as HTMLButtonElement);
+      const step = event.shiftKey ? -1 : 1;
+      const next = index === -1 ? targets[0] : targets[(index + step + targets.length) % targets.length];
+      next?.focus();
     };
-  }, [showDialog]);
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedRequest, expired]);
 
   const formatTimeLeft = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -67,118 +118,77 @@ export const SudoPopup: React.FC<SudoPopupProps> = ({
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   };
 
-  const handleApprove = () => {
-    if (selectedRequest && onApprove) {
-      onApprove(selectedRequest.id);
-    }
-    setSelectedRequest(null);
-  };
-
-  const handleReject = () => {
-    if (selectedRequest && onReject) {
-      onReject(selectedRequest.id);
-    }
-    setSelectedRequest(null);
-  };
+  const explanation = reason && reason.trim() ? reason.trim() : FALLBACK_EXPLANATION;
 
   return (
-    <>
-      {/* Sudo Status Dot Indicator */}
+    <AnimatePresence>
+      {showDialog && selectedRequest && (
       <motion.div
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className={`sudo-dot${hasPending ? " is-pending" : " is-ok"}`}
+        key={selectedRequest.id}
+        initial={animate ? { opacity: 0 } : false}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: animate ? 0.18 : 0 }}
+        className="modal-backdrop"
       >
-        <span className="orb" aria-hidden="true" />
-        <span>
-          Sudo {hasPending ? "pending" : "secure"}
-        </span>
-        {hasPending && <span className="pending-dots">{dots}</span>}
+        <motion.div
+          initial={animate ? { opacity: 0, y: 10 } : false}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 4, pointerEvents: "none" }}
+          transition={{ duration: animate ? 0.22 : 0, ease: [0.16, 1, 0.3, 1] }}
+          className="dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="sudo-title"
+          aria-describedby="sudo-explain"
+        >
+          <h3 className="dialog-title" id="sudo-title">
+            Mamba needs your permission
+          </h3>
+          <p className="dialog-explain" id="sudo-explain">
+            {explanation}
+          </p>
+
+          <div className="dialog-action">
+            <div className="dialog-action-label">What it will do</div>
+            <div className="dialog-action-text">{selectedRequest.command}</div>
+            {selectedRequest.package && (
+              <div className="dialog-action-meta">Package {selectedRequest.package}</div>
+            )}
+          </div>
+
+          <p className="dialog-risk">{RISK_LINE}</p>
+
+          <div className="dialog-foot">
+            <span className={`dialog-timer${expired ? " is-expired" : ""}`}>
+              {expired
+                ? "This request has expired. Answer from the composer to continue."
+                : `Expires in ${formatTimeLeft(timeLeft)}`}
+            </span>
+            <div className="dialog-actions">
+              <button
+                ref={denyRef}
+                type="button"
+                onClick={handleReject}
+                disabled={expired}
+                className="btn btn-ghost"
+              >
+                Deny
+              </button>
+              <button
+                ref={approveRef}
+                type="button"
+                onClick={handleApprove}
+                disabled={expired}
+                className="btn btn-primary"
+              >
+                Allow
+              </button>
+            </div>
+          </div>
+        </motion.div>
       </motion.div>
-
-      {/* Sudo Confirmation Dialog */}
-      <AnimatePresence>
-        {showDialog && selectedRequest && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="modal-backdrop"
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="dialog"
-              role="alertdialog"
-              aria-label="Sudo confirmation required"
-            >
-              <div className="dialog-head">
-                <div className="dialog-icon">
-                  <Shield />
-                </div>
-                <div>
-                  <h3 className="dialog-title">Confirmation required</h3>
-                  <p className="dialog-sub">
-                    Command execution needs your approval
-                  </p>
-                </div>
-              </div>
-
-              <div className="dialog-code">
-                <div className="k">Command</div>
-                <div className="v">
-                  {selectedRequest.command}
-                </div>
-                {selectedRequest.package && (
-                  <>
-                    <div className="k" style={{ marginTop: 10 }}>Package</div>
-                    <div className="v" style={{ color: "var(--cyan)" }}>
-                      {selectedRequest.package}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="notice amber">
-                <Clock />
-                <span>
-                  Expires in: <strong>{formatTimeLeft(timeLeft)}</strong>
-                </span>
-              </div>
-
-              <div className="notice rose">
-                <AlertCircle />
-                <div>
-                  <div className="strong">Security warning</div>
-                  <div>
-                    This command will execute with elevated privileges. Only approve if you trust
-                    the source.
-                  </div>
-                </div>
-              </div>
-
-              <div className="dialog-actions">
-                <button
-                  onClick={handleReject}
-                  className="btn btn-reject"
-                >
-                  <X />
-                  Reject
-                </button>
-                <button
-                  onClick={handleApprove}
-                  className="btn btn-approve"
-                >
-                  <Check />
-                  Approve
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
+      )}
+    </AnimatePresence>
   );
 };

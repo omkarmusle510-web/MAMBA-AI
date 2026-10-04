@@ -1,5 +1,8 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Mic, MicOff, Send, Square } from "lucide-react";
+
+import { motionEnabled } from "./motionPrefs";
+import { loadSettings } from "./settingsStore";
 
 interface ComposerProps {
   onMessageSubmit: (message: string) => void;
@@ -27,6 +30,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [cancelSent, setCancelSent] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const motionOn = useMemo(() => motionEnabled(loadSettings().animations), []);
 
   // The turn is resolved (complete/cancelled/error) — re-arm the stop button.
   useEffect(() => {
@@ -54,7 +58,9 @@ export const Composer: React.FC<ComposerProps> = ({
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+    // With motion off the field grows by itself (CSS caps it at 140px); the
+    // scripted height only exists to make the growth smooth.
+    if (motionOn) el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
   };
 
   const cancel = () => {

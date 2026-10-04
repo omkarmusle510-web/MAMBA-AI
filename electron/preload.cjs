@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld("mambaDesktop", {
   },
   consumePendingVoiceTurn: () => ipcRenderer.sendSync("mamba:consume-pending-voice-turn") === true,
   notifyWakeSettingChanged: (enabled) => ipcRenderer.send("mamba:wake-setting-changed", enabled === true),
+  // Wake phrase / sensitivity, changed in the main-window Settings panel.
+  notifyWakeOptions: (opts) => ipcRenderer.send("mamba:wake-options", opts),
+  onWakeOptions: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const handler = (_event, opts) => callback(opts);
+    ipcRenderer.on("mamba:wake-options", handler);
+    return () => ipcRenderer.removeListener("mamba:wake-options", handler);
+  },
   onWakeSetting: (callback) => {
     if (typeof callback !== "function") return () => {};
     const handler = (_event, enabled) => callback(enabled === true);

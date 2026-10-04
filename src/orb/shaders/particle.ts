@@ -1,7 +1,11 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * Mamba Dense Particle Orb Shaders
+ * Mamba Orb particle field — the living layer.
+ *
+ * No shell, no rim, no boundary: particles fade in past the inner light and
+ * out at the far edge, and depth is carried by size + alpha rather than by a
+ * drawn sphere.
  */
 
 export const particleVS = `
@@ -12,10 +16,20 @@ uniform float stateSpeed;
 uniform float stateTurbulence;
 uniform float statePull;
 uniform float stateExpand;
+uniform float stateCohesion;
+uniform float stateDirectional;
+uniform vec3 stateFlowAxis;
+uniform float uBreath;
+uniform vec2 uParallax;
 uniform vec3 statePrimary;
 uniform vec3 stateSecondary;
 uniform vec3 stateAccent;
 uniform float stateMix;
+uniform float uCoreIn;
+uniform float uCoreOut;
+uniform float uEdgeOut;
+uniform float uEdgeIn;
+uniform float uAlphaScale;
 
 attribute vec3 basePosition;
 attribute vec3 customColor;
@@ -48,14 +62,27 @@ void main() {
     );
     pos += curl * (0.075 * stateTurbulence);
 
+    // Cohesion: the settled states gather the field instead of freezing it
+    float band = mix(1.16, 0.96, stateCohesion);
+    float shellR = length(pos);
+    pos = normalize(pos) * (shellR + (band - shellR) * stateCohesion * 0.35);
+
+    // Directional flow: the working state streams along a slowly precessing axis
+    vec3 axis = normalize(stateFlowAxis);
+    float along = dot(pos, axis);
+    pos += axis * (along * stateDirectional * 0.24 * (0.6 + 0.4 * sin(time * 0.8 + phase * 6.28318)));
+
+    // Breath: the quiet states swell almost imperceptibly
+    pos *= 1.0 + uBreath;
+
     // Audio reactivity & State dynamics:
-    // Listening / mic audio: particles pull inward toward the dark core
+    // Listening / mic audio: particles pull inward toward the light
     float micEnergy = inputData.x;
     float pull = (statePull + micEnergy * 0.4) * 0.20;
     float currentR = length(pos);
     float targetR = max(0.74, currentR - pull * (0.5 + 0.5 * sin(time * 3.2 + phase * 6.28318)));
 
-    // Speaking / output speech audio: energetic particles flow outward
+    // Speaking / output speech audio: energy flows outward
     float outEnergy = outputData.x;
     float expand = (stateExpand + outEnergy * 0.5) * 0.24;
     targetR += expand * (0.5 + 0.5 * sin(time * 4.5 + phase * 9.42477));
@@ -63,18 +90,22 @@ void main() {
     pos = normalize(pos) * targetR;
 
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    // Pointer parallax, weighted so the near field leads the far field
+    mvPosition.xy += uParallax * (0.55 - 0.45 * (length(pos) - 0.7));
     gl_Position = projectionMatrix * mvPosition;
 
-    // Particle size with distance attenuation
+    // Depth cue: far particles dim instead of staying equally bright
+    float depthFade = clamp(1.0 - (-mvPosition.z - 3.0) / 3.4, 0.35, 1.0);
+
+    // Particle size with distance attenuation, capped so depth never blooms
     float pSize = size * (210.0 / -mvPosition.z);
     pSize *= (1.0 + 0.25 * sin(time * 2.8 + phase * 6.28318) + 0.35 * outEnergy);
-    gl_PointSize = clamp(pSize, 1.5, 20.0);
+    gl_PointSize = clamp(pSize, 1.2, 13.0);
 
-    // Fade naturally into transparency
-    // Dark core surface is at 0.70; outer field fades smoothly towards 1.72
-    float coreFade = smoothstep(0.71, 0.80, targetR);
-    float outerFade = smoothstep(1.72, 1.05, targetR);
-    vAlpha = coreFade * outerFade * (0.65 + 0.35 * sin(time * 2.2 + phase * 6.28318));
+    // Soft in from the inner light, soft out at the far edge — no silhouette
+    float coreFade = smoothstep(uCoreIn, uCoreOut, targetR);
+    float outerFade = 1.0 - smoothstep(uEdgeOut, uEdgeIn, targetR);
+    vAlpha = coreFade * outerFade * (0.55 + 0.35 * sin(time * 1.6 + phase * 6.28318)) * depthFade * uAlphaScale;
 
     // Dynamic state color blending
     vec3 themed = mix(stateSecondary, statePrimary, customColor.g);
@@ -96,13 +127,12 @@ void main() {
     float dist = length(coord);
     if (dist > 0.5) discard;
 
-    // High quality soft glowing particle profile
-    float gaussian = exp(-dist * dist * 12.0);
-    float softEdge = smoothstep(0.5, 0.08, dist);
-    float alpha = vAlpha * softEdge;
+    float gaussian = exp(-dist * dist * 14.0);
+    float softEdge = smoothstep(0.5, 0.12, dist);
+    float alpha = vAlpha * softEdge * 0.82;
 
-    // Hot central nucleus (subtle white center)
-    vec3 color = mix(vColor, vec3(1.0), gaussian * 0.55);
+    // Only a hint of a hot nucleus — the light comes from the haze layer
+    vec3 color = mix(vColor, vec3(1.0), gaussian * 0.22);
 
     gl_FragColor = vec4(color, alpha);
 }

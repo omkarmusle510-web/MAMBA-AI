@@ -28,6 +28,8 @@ export const FloatingOrb: React.FC = () => {
           "idle",
           "listening",
           "thinking",
+          "executing",
+          "verifying",
           "speaking",
           "permission",
           "error",
@@ -96,9 +98,26 @@ export const FloatingOrb: React.FC = () => {
         }
       });
 
+      // Runtime phrase/sensitivity from the main-window Settings panel.
+      const cleanupWakeOptions = window.mambaDesktop?.onWakeOptions?.((opts) => {
+        const phrase =
+          typeof opts?.phrase === "string" && opts.phrase.trim()
+            ? opts.phrase.trim()
+            : undefined;
+        const sensitivity =
+          typeof opts?.sensitivity === "number"
+            ? Math.min(100, Math.max(0, opts.sensitivity))
+            : undefined;
+        const patch: { phrase?: string; sensitivity?: number } = {};
+        if (phrase !== undefined) patch.phrase = phrase;
+        if (sensitivity !== undefined) patch.sensitivity = sensitivity;
+        controller.updateOptions(patch);
+      });
+
       return () => {
         cleanupState?.();
         cleanupWakeSetting?.();
+        cleanupWakeOptions?.();
         controller.stop();
         wakeRef.current = null;
       };
@@ -123,14 +142,9 @@ export const FloatingOrb: React.FC = () => {
         userSelect: "none",
       } as React.CSSProperties}
     >
-      {/* 3D Orb Visual Canvas Layer - pointer-events: none so it doesn't block window dragging from transparent areas */}
+      {/* Orb visual layer - pointer-events: none so it never blocks dragging */}
       <div className="orb-canvas-layer">
-        <MambaPresence
-          state={presenceState}
-          variant="orb"
-          size={220}
-          showLabel={false}
-        />
+        <MambaPresence state={presenceState} size={208} />
       </div>
 
       {/* Mic-armed indicator: visible while the wake listener is armed. */}

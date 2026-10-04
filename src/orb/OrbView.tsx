@@ -1,10 +1,13 @@
 import React, { useEffect, useRef } from "react";
 import { OrbRenderer, OrbState } from "./OrbRenderer";
+import { motionEnabled } from "../motionPrefs";
+import { loadSettings } from "../settingsStore";
 
 export interface OrbViewProps {
   state: OrbState;
   inputNode?: AudioNode | AnalyserNode | null;
   outputNode?: AudioNode | AnalyserNode | null;
+  /** Explicit pixel size. Omit to fill the CSS-sized parent (--orb-size). */
   size?: number;
   className?: string;
 }
@@ -13,9 +16,10 @@ export const OrbView: React.FC<OrbViewProps> = ({
   state = "idle",
   inputNode,
   outputNode,
-  size = 220,
+  size,
   className = "",
 }) => {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<OrbRenderer | null>(null);
 
@@ -28,23 +32,36 @@ export const OrbView: React.FC<OrbViewProps> = ({
       inputNode,
       outputNode,
       initialState: state,
+      animated: motionEnabled(loadSettings().animations),
     });
     rendererRef.current = renderer;
 
     const handleResize = () => {
-      if (rendererRef.current && canvas) {
-        const w = canvas.parentElement?.clientWidth || size;
-        const h = canvas.parentElement?.clientHeight || size;
-        rendererRef.current.resize(w, h);
-      }
+      const w = canvas.parentElement?.clientWidth || 220;
+      const h = canvas.parentElement?.clientHeight || 220;
+      renderer.resize(w, h);
     };
 
-    const resizeObserver = new ResizeObserver(() => handleResize());
-    if (canvas.parentElement) {
-      resizeObserver.observe(canvas.parentElement);
-    }
+    const resizeObserver = new ResizeObserver(handleResize);
+    if (canvas.parentElement) resizeObserver.observe(canvas.parentElement);
+
+    // Capped parallax: the pointer is read against the orb's own box so the
+    // field shifts a few pixels instead of tilting.
+    const handlePointerMove = (e: PointerEvent) => {
+      const box = wrapRef.current?.getBoundingClientRect();
+      if (!box || box.width === 0 || box.height === 0) return;
+      const x = ((e.clientX - box.left) / box.width) * 2 - 1;
+      const y = ((e.clientY - box.top) / box.height) * 2 - 1;
+      renderer.setPointer(Math.max(-1, Math.min(1, x)), Math.max(-1, Math.min(1, y)));
+    };
+    const handlePointerLeave = () => renderer.setPointer(0, 0);
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerleave", handlePointerLeave);
 
     return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerleave", handlePointerLeave);
       resizeObserver.disconnect();
       renderer.dispose();
       rendererRef.current = null;
@@ -53,38 +70,25 @@ export const OrbView: React.FC<OrbViewProps> = ({
 
   // Update state when Mamba Presence changes
   useEffect(() => {
-    if (rendererRef.current) {
-      rendererRef.current.setState(state);
-    }
+    rendererRef.current?.setState(state);
   }, [state]);
 
   // Update audio nodes dynamically if provided
   useEffect(() => {
-    if (rendererRef.current) {
-      rendererRef.current.setInputNode(inputNode || null);
-    }
+    rendererRef.current?.setInputNode(inputNode || null);
   }, [inputNode]);
 
   useEffect(() => {
-    if (rendererRef.current) {
-      rendererRef.current.setOutputNode(outputNode || null);
-    }
+    rendererRef.current?.setOutputNode(outputNode || null);
   }, [outputNode]);
 
   return (
     <div
-      style={{ width: size, height: size, background: "transparent", overflow: "hidden" }}
-      className={`relative flex items-center justify-center pointer-events-none bg-transparent ${className}`}
+      ref={wrapRef}
+      className={`orb-view ${className}`}
+      style={size ? { width: size, height: size } : undefined}
     >
-      <canvas
-        ref={canvasRef}
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "block",
-          background: "transparent",
-        }}
-      />
+      <canvas ref={canvasRef} className="orb-canvas" />
     </div>
   );
 };

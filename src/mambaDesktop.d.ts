@@ -1,3 +1,8 @@
+export interface WakeOptions {
+  phrase?: string;
+  sensitivity?: number;
+}
+
 export interface MambaDesktopAPI {
   isDesktop: boolean;
   platform: string;
@@ -20,6 +25,9 @@ export interface MambaDesktopAPI {
   consumePendingVoiceTurn?: () => boolean;
   notifyWakeSettingChanged?: (enabled: boolean) => void;
   onWakeSetting?: (callback: (enabled: boolean) => void) => () => void;
+  /** Wake phrase / sensitivity, changed in Settings (main window → orb renderer). */
+  notifyWakeOptions?: (opts: WakeOptions) => void;
+  onWakeOptions?: (callback: (opts: WakeOptions) => void) => () => void;
   onLifecycleState?: (callback: (state: string) => void) => () => void;
   reportActivity?: (type: string) => void;
   reportTaskState?: (active: boolean) => void;

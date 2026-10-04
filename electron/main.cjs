@@ -267,7 +267,12 @@ function createMainWindow() {
     height: 750,
     minWidth: 480,
     minHeight: 600,
-    backgroundColor: "#020617",
+    // Frameless with the native caption overlay: the header drag region does
+    // the work, Windows keeps Snap layouts and Win+arrow shortcuts alive.
+    frame: false,
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#0b0d10", symbolColor: "#a5adba", height: 34 },
+    backgroundColor: "#0b0d10",
     title: "Mamba AI",
     icon: iconPath,
     autoHideMenuBar: true,
@@ -521,6 +526,17 @@ function setupIpc() {
       orbWindow.webContents.send("mamba:wake-setting", enabled === true);
     }
   });
+
+  // Wake phrase / sensitivity changed in Settings: forward to the orb renderer.
+  ipcMain.on("mamba:wake-options", (event, opts) => {
+    if (!opts || typeof opts !== "object") return;
+    if (orbWindow && !orbWindow.isDestroyed()) {
+      orbWindow.webContents.send("mamba:wake-options", {
+        phrase: typeof opts.phrase === "string" ? opts.phrase : undefined,
+        sensitivity: Number.isFinite(opts.sensitivity) ? opts.sensitivity : undefined,
+      });
+    }
+  });
 }
 
 async function bootApp() {
@@ -630,12 +646,21 @@ async function runSmokeTest() {
     console.log(`[Validation 5] Main window hidden initially in DORMANT: ${!mainWindow.isVisible()}`);
 
     // 5. Test Orb states rendering
-    const testStates = ["idle", "listening", "thinking", "speaking", "permission", "error"];
+    const testStates = [
+      "idle",
+      "listening",
+      "thinking",
+      "executing",
+      "verifying",
+      "speaking",
+      "permission",
+      "error",
+    ];
     for (const st of testStates) {
       orbWindow.webContents.send("mamba:state", st);
       await sleep(150);
     }
-    console.log(`[Validation 6] All 6 Orb visual states updated without error: true`);
+    console.log(`[Validation 6] All ${testStates.length} Orb visual states updated without error: true`);
 
     // 6. Activate session via Orb click simulation
     console.log("[SmokeTest] Activating session via Orb click...");

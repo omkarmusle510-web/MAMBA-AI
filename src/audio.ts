@@ -1046,5 +1046,3 @@ export class MambaAudioSession {
     this.outputGainNode = null;
   }
 }
-
-export { MambaAudioSession as ElysiaAudioSession };
