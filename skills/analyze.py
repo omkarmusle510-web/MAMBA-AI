@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.context import ExecutionContext
+from core.streaming import current_sink
 from models.protocols import ModelRouter
 from models.types import ModelRequest
 from tasks.executor import TaskExecutor
@@ -235,8 +236,13 @@ class AnalyzeSkill(BaseSkill):
             parameters=dict(self._model_parameters),
         )
 
+        sink = current_sink()
         try:
-            if hasattr(self._router, "invoke"):
+            if sink is not None and hasattr(self._router, "stream"):
+                # Provisional deltas for the UI; ``response`` below stays the
+                # authoritative text for observations, verification and memory.
+                response = self._router.stream(request, sink)
+            elif hasattr(self._router, "invoke"):
                 response = self._router.invoke(request)
             else:
                 provider = self._router.route(request)

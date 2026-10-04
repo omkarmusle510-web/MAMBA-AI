@@ -1,11 +1,14 @@
-import React, { useState, useRef } from "react";
-import { Mic, MicOff, Send } from "lucide-react";
+import React, { useEffect, useState, useRef } from "react";
+import { Mic, MicOff, Send, Square } from "lucide-react";
 
 interface ComposerProps {
   onMessageSubmit: (message: string) => void;
   voiceActive: boolean;
   onToggleVoice: () => void;
   disabled?: boolean;
+  /** A turn is in flight — offer a stop control instead of sending. */
+  busy?: boolean;
+  onCancelTurn?: () => void;
 }
 
 /**
@@ -17,10 +20,18 @@ export const Composer: React.FC<ComposerProps> = ({
   voiceActive,
   onToggleVoice,
   disabled = false,
+  busy = false,
+  onCancelTurn,
 }) => {
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [cancelSent, setCancelSent] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // The turn is resolved (complete/cancelled/error) — re-arm the stop button.
+  useEffect(() => {
+    if (!busy) setCancelSent(false);
+  }, [busy]);
 
   const submit = () => {
     const trimmed = message.trim();
@@ -44,6 +55,12 @@ export const Composer: React.FC<ComposerProps> = ({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  };
+
+  const cancel = () => {
+    if (!onCancelTurn || cancelSent) return;
+    setCancelSent(true);
+    onCancelTurn();
   };
 
   return (
@@ -72,16 +89,29 @@ export const Composer: React.FC<ComposerProps> = ({
       >
         {voiceActive ? <MicOff /> : <Mic />}
       </button>
-      <button
-        type="button"
-        className="composer-btn send"
-        onClick={submit}
-        disabled={!message.trim() || isSending || disabled}
-        title="Send message"
-        aria-label="Send message"
-      >
-        <Send />
-      </button>
+      {busy && onCancelTurn ? (
+        <button
+          type="button"
+          className="composer-btn is-stop"
+          onClick={cancel}
+          disabled={cancelSent}
+          title={cancelSent ? "Cancelling…" : "Stop this turn"}
+          aria-label={cancelSent ? "Cancelling" : "Stop this turn"}
+        >
+          <Square />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="composer-btn send"
+          onClick={submit}
+          disabled={!message.trim() || isSending || disabled}
+          title="Send message"
+          aria-label="Send message"
+        >
+          <Send />
+        </button>
+      )}
     </div>
   );
 };

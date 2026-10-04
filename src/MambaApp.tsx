@@ -17,7 +17,11 @@ interface TranscriptEntry {
   role: "user" | "model";
   content: string;
   isError?: boolean;
+  // Provisional Phase 4 streaming bubble: text is incremental output only.
+  streaming?: boolean;
 }
+
+const newEntryId = () => Math.random().toString(36).substring(2, 9);
 
 export const MambaApp: React.FC = () => {
   // Runtime State
@@ -54,6 +58,81 @@ export const MambaApp: React.FC = () => {
   const pendingTurnRef = useRef<boolean>(false);
   // True while a continuous (Phase 8) voice session holds the mic open.
   const [continuousVoiceActive, setContinuousVoiceActive] = useState(false);
+
+  // --- Phase 4 provisional streaming (presentation only) ---
+  // A turn owns at most one open streaming bubble. Delta frames patch it;
+  // ONLY the authoritative model transcription can finalize it. Anything
+  // else (turn end without a final text, cancellation, error) discards it,
+  // so streamed text can never be mistaken for a completed answer.
+  const streamEntryIdRef = useRef<string | null>(null);
+  const deltaBufferRef = useRef("");
+  const deltaFrameRef = useRef<number | null>(null);
+  // Composer adds the user message optimistically; the transport echoes it
+  // back as a user transcription, which must not appear twice.
+  const userEchoRef = useRef<string | null>(null);
+
+  const flushDeltaFrame = () => {
+    deltaFrameRef.current = null;
+    const chunk = deltaBufferRef.current;
+    deltaBufferRef.current = "";
+    const entryId = streamEntryIdRef.current;
+    if (!chunk || !entryId) return;
+    setTranscript((prev) =>
+      prev.map((entry) =>
+        entry.id === entryId ? { ...entry, content: entry.content + chunk } : entry
+      )
+    );
+  };
+
+  const appendDelta = (text: string) => {
+    if (!streamEntryIdRef.current) {
+      const id = newEntryId();
+      streamEntryIdRef.current = id;
+      setTranscript((prev) => [
+        ...prev,
+        { id, timestamp: new Date().toISOString(), role: "model", content: "", streaming: true },
+      ]);
+    }
+    deltaBufferRef.current += text;
+    if (deltaFrameRef.current === null) {
+      deltaFrameRef.current = requestAnimationFrame(flushDeltaFrame);
+    }
+  };
+
+  /** Close the open bubble: pending deltas are dropped, then `action` runs. */
+  const resolveStream = (action: (entryId: string) => void): void => {
+    const entryId = streamEntryIdRef.current;
+    streamEntryIdRef.current = null;
+    deltaBufferRef.current = "";
+    if (deltaFrameRef.current !== null) {
+      cancelAnimationFrame(deltaFrameRef.current);
+      deltaFrameRef.current = null;
+    }
+    if (entryId) action(entryId);
+  };
+
+  /** Authoritative text: replace the provisional content, keep it readable. */
+  const finalizeStreamWith = (text: string) => {
+    resolveStream((entryId) =>
+      setTranscript((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId ? { ...entry, content: text, streaming: false } : entry
+        )
+      )
+    );
+  };
+
+  /** No authoritative text backs the deltas — they were never an answer. */
+  const discardStream = () => {
+    resolveStream((entryId) =>
+      setTranscript((prev) => prev.filter((entry) => entry.id !== entryId))
+    );
+  };
+
+  const cancelTurn = () => {
+    audioSessionRef.current?.sendCancel();
+    addToast("Cancelling current turn…", "info");
+  };
 
   // Sync liveState to desktop shell (for Floating Orb synchronization)
   useEffect(() => {
@@ -160,13 +239,38 @@ export const MambaApp: React.FC = () => {
         }
       },
       onTranscription: (role, text) => {
-        const newEntry: TranscriptEntry = {
-          id: Math.random().toString(36).substring(2, 9),
-          timestamp: new Date().toISOString(),
-          role,
-          content: text,
-        };
-        setTranscript((prev) => [...prev, newEntry]);
+        if (role === "user") {
+          // The composer already showed the typed message.
+          if (userEchoRef.current === text) {
+            userEchoRef.current = null;
+            return;
+          }
+          setTranscript((prev) => [
+            ...prev,
+            { id: newEntryId(), timestamp: new Date().toISOString(), role, content: text },
+          ]);
+          return;
+        }
+        // The model transcription is the authoritative turn result.
+        if (streamEntryIdRef.current) {
+          finalizeStreamWith(text);
+        } else {
+          setTranscript((prev) => [
+            ...prev,
+            { id: newEntryId(), timestamp: new Date().toISOString(), role, content: text },
+          ]);
+        }
+      },
+      onDelta: appendDelta,
+      onCancelled: () => {
+        discardStream();
+        addToast("Turn cancelled.", "info");
+      },
+      onTurnComplete: () => {
+        userEchoRef.current = null;
+        // Reached without an authoritative model text (e.g. the turn stopped
+        // at an approval prompt): provisional deltas are not an answer.
+        discardStream();
       },
       onProgress: (milestone) => {
         addToast(milestone, "milestone");
@@ -184,6 +288,8 @@ export const MambaApp: React.FC = () => {
         addToast(`Permission needed: ${reason}`, "reminder");
       },
       onError: (err) => {
+        // A failed turn is a failure, not partially streamed success.
+        discardStream();
         addToast(err, "error");
         setLiveState("error");
       },
@@ -220,6 +326,8 @@ export const MambaApp: React.FC = () => {
 
     return () => {
       cleanupVoiceTurn?.();
+      if (deltaFrameRef.current !== null) cancelAnimationFrame(deltaFrameRef.current);
+      deltaFrameRef.current = null;
       session.disconnect();
     };
   }, []);
@@ -279,13 +387,17 @@ export const MambaApp: React.FC = () => {
   const handleMessageSubmit = (message: string) => {
     if (!message.trim()) return;
 
+    // A new turn never inherits an unresolved stream slot.
+    discardStream();
+
     // Add user message to transcript
     const userEntry: TranscriptEntry = {
-      id: Math.random().toString(36).substring(2, 9),
+      id: newEntryId(),
       timestamp: new Date().toISOString(),
       role: "user",
       content: message,
     };
+    userEchoRef.current = message.trim();
     setTranscript((prev) => [...prev, userEntry]);
 
     // Send through canonical transport
@@ -443,6 +555,8 @@ export const MambaApp: React.FC = () => {
           onMessageSubmit={handleMessageSubmit}
           voiceActive={continuousVoiceActive}
           onToggleVoice={toggleVoiceSession}
+          busy={liveState === "thinking"}
+          onCancelTurn={cancelTurn}
           disabled={liveState === "disconnected" || liveState === "connecting"}
         />
         <div className="composer-hint">

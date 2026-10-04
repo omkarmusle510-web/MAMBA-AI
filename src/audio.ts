@@ -95,6 +95,10 @@ export class MambaAudioSession {
   // Voice-turn lifecycle
   private voiceTurnActive = false;
   private turnCompleteReceived = false;
+  // True between the server's turn-start status and that turn's terminal
+  // frame. Delta frames outside it belong to an already-resolved turn and are
+  // dropped, so streamed text can never outlive (or attach to the wrong) turn.
+  private turnInFlight = false;
 
   // Continuous session (Phase 8): mic held open across turns; barge-in
   // allowed while TTS is playing. One-turn mode leaves these untouched.
@@ -120,6 +124,13 @@ export class MambaAudioSession {
   private onReminder?: (text: string, id: string) => void;
   private onTerminalOutput?: (tool: string, args: any, output: string) => void;
   private onVoiceTurnComplete?: () => void;
+  // Provisional streaming deltas (Phase 4). These are incremental UI text
+  // ONLY — the authoritative answer always arrives as a model transcription.
+  private onDelta?: (text: string) => void;
+  private onCancelled?: () => void;
+  // Fires for EVERY turnComplete frame, including typed-chat turns (the
+  // voice-turn callback below only fires when a voice turn closes).
+  private onTurnComplete?: () => void;
 
   private currentState: LiveState = "disconnected";
   private isActivated = false;
@@ -135,6 +146,9 @@ export class MambaAudioSession {
     onReminder?: (text: string, id: string) => void;
     onTerminalOutput?: (tool: string, args: any, output: string) => void;
     onVoiceTurnComplete?: () => void;
+    onDelta?: (text: string) => void;
+    onCancelled?: () => void;
+    onTurnComplete?: () => void;
   }) {
     this.onStateChange = handlers.onStateChange;
     this.onTranscription = handlers.onTranscription;
@@ -146,11 +160,21 @@ export class MambaAudioSession {
     this.onReminder = handlers.onReminder;
     this.onTerminalOutput = handlers.onTerminalOutput;
     this.onVoiceTurnComplete = handlers.onVoiceTurnComplete;
+    this.onDelta = handlers.onDelta;
+    this.onCancelled = handlers.onCancelled;
+    this.onTurnComplete = handlers.onTurnComplete;
   }
 
   public sendText(text: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "text", text }));
+    }
+  }
+
+  /** Ask the backend to cancel the in-flight turn (cooperative, bounded). */
+  public sendCancel(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "cancel" }));
     }
   }
 
@@ -238,6 +262,7 @@ export class MambaAudioSession {
 
           // Root Error Handler message
           if (data.type === "error") {
+            this.turnInFlight = false;
             this.onError(data.error);
             if (this.voiceTurnActive) {
               // Voice-turn failures end the turn, not the whole session.
@@ -258,17 +283,28 @@ export class MambaAudioSession {
           // Handle server-side states
           if (data.type === "status") {
             console.log("[Mamba WS Status]:", data.status);
+            // Deltas are only meaningful inside the window opened by a
+            // turn-start status and closed by that turn's terminal frame.
+            if (data.status === "thinking") this.turnInFlight = true;
+            else if (data.status === "connected" || data.status === "listening") {
+              this.turnInFlight = false;
+            }
             if (data.status === "connected") {
               if (!this.voiceTurnActive) this.setState("idle");
             } else if (
               data.status === "thinking" ||
               data.status === "speaking" ||
               data.status === "permission" ||
-              data.status === "idle"
+              data.status === "idle" ||
+              data.status === "listening"
             ) {
-              // During a voice turn the turn lifecycle drives state; the
-              // server's trailing "listening" must not override "speaking".
-              if (data.status === "listening" && this.voiceTurnActive) return;
+              // The server ends every turn (voice or typed) by announcing
+              // "listening". Only the mic being actually open justifies the
+              // LISTENING label; a typed-chat turn returns to the quiet state.
+              if (data.status === "listening" && !this.voiceTurnActive && !this.continuousActive) {
+                this.setState("idle");
+                return;
+              }
               this.setState(data.status);
             } else if (data.status === "session_closed") {
               this.disconnect();
@@ -305,8 +341,32 @@ export class MambaAudioSession {
 
           // Turn complete
           if (data.type === "turnComplete") {
+            this.turnInFlight = false;
+            this.turnCompleteReceived = true;
+            try {
+              this.onTurnComplete?.();
+            } catch {
+              /* ignore */
+            }
+            this.maybeCompleteVoiceTurn();
+            return;
+          }
+
+          // Terminal cancellation of the current turn. The provisional
+          // deltas streamed so far are NOT an answer; the UI drops them.
+          // No turnComplete follows a cancelled turn, so the voice-turn
+          // lifecycle has to be closed here or the mic stays held open.
+          if (data.type === "cancelled") {
+            this.turnInFlight = false;
+            this.onCancelled?.();
             this.turnCompleteReceived = true;
             this.maybeCompleteVoiceTurn();
+            return;
+          }
+
+          // Provisional streaming text for the in-flight turn (Phase 4).
+          if (data.type === "delta" && typeof data.text === "string") {
+            if (this.turnInFlight) this.onDelta?.(data.text);
             return;
           }
 
@@ -959,6 +1019,7 @@ export class MambaAudioSession {
   // Fully cleanup and release connection sockets
   public disconnect() {
     this.isActivated = false;
+    this.turnInFlight = false;
     // Tear down any voice turn/session first (idempotent; fires
     // onVoiceTurnComplete once if a turn or session was active).
     this.finishContinuousSession();

@@ -360,11 +360,13 @@ input, textarea { font-family: inherit; }
 }
 .composer-btn.send:hover { background: rgba(34, 211, 238, 0.22); color: #a5f3fc; }
 
-.composer-btn.mic-live {
+.composer-btn.mic-live,
+.composer-btn.is-stop {
   background: rgba(251, 113, 133, 0.14);
   border-color: rgba(251, 113, 133, 0.4);
   color: var(--rose);
 }
+.composer-btn.is-stop:hover { background: rgba(251, 113, 133, 0.24); color: #fecdd3; }
 
 .composer-hint {
   margin-top: 8px;
@@ -638,6 +640,36 @@ input, textarea { font-family: inherit; }
   color: #fde68a;
   border-radius: 3px;
   padding: 0 1px;
+}
+
+/* Provisional streaming text (Phase 4). The caret only says "still arriving" —
+   the finalized answer comes from the authoritative model frame. */
+.t-body.is-streaming {
+  color: var(--ink-2);
+}
+
+.t-body.is-streaming::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 14px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background: var(--cyan);
+  animation: mamba-caret 1s steps(2, start) infinite;
+}
+
+@keyframes mamba-caret {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-body.is-streaming::after {
+    animation: none;
+  }
 }
 
 /* ---------- sudo popup ---------- */

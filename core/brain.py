@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 from memory.protocols import MemoryStore
@@ -32,10 +33,12 @@ from .cancellation import (
     reset_current_token,
     set_current_token,
 )
+from . import timing
 from .context import ExecutionContext
 from .errors import CoreError
 from .protocols import Executor, Planner
 from .state import ExecutionState
+from .streaming import reset_current_sink, set_current_sink
 from .types import (
     ExecutionPlan,
     ExecutionResult,
@@ -555,6 +558,7 @@ class Brain:
         *,
         on_progress: Any = None,
         cancel_token: Any = None,
+        stream_sink: Any = None,
     ) -> ExecutionResult:
         """Run a user request through the observation-driven execution lifecycle.
 
@@ -566,19 +570,43 @@ class Brain:
                 it is bound as the ambient token for this execution so the loop
                 and interruptible collaborators (e.g. the MCP stdio client) can
                 honour cancellation. Omitting it preserves prior behaviour.
+            stream_sink: Optional callable(str) receiving provisional model text
+                deltas. Like ``cancel_token`` it is bound as the ambient sink for
+                this execution, so the answer-producing skill can stream without
+                any signature change. It never carries authority: observations,
+                verification, memory and the returned ``ExecutionResult`` all use
+                the complete text. Omitting it preserves prior behaviour.
         """
         _progress = on_progress if callable(on_progress) else None
+        _sink = stream_sink if callable(stream_sink) else None
         _reset = set_current_token(cancel_token) if cancel_token is not None else None
+        _sink_reset = (
+            set_current_sink(_sink) if _sink is not None else None
+        )
         try:
             return self._run(request, _progress)
         finally:
+            if _sink_reset is not None:
+                reset_current_sink(_sink_reset)
             if _reset is not None:
                 reset_current_token(_reset)
 
     def _run(self, request: str | UserRequest, _progress: Any) -> ExecutionResult:
         """Body of :meth:`run`; the ambient cancel token is already bound."""
+        _t_start = time.perf_counter()
+        holder: dict[str, Any] = {}
+        try:
+            return self._run_impl(request, _progress, holder)
+        finally:
+            sink = holder.get("md")
+            if sink is not None:
+                timing.mark(sink, "request_total", time.perf_counter() - _t_start)
 
+    def _run_impl(
+        self, request: str | UserRequest, _progress: Any, holder: dict[str, Any],
+    ) -> ExecutionResult:
         # ── 1. Request Intake ──
+        _t_intake = time.perf_counter()
         user_request = self._intake(request)
         if user_request is None:
             return ExecutionResult(
@@ -590,6 +618,8 @@ class Brain:
                 if isinstance(request, str) and not request.strip()
                 else f"expected str or UserRequest, got {type(request).__name__}",
             )
+        holder["md"] = user_request.metadata
+        timing.mark(user_request.metadata, "intake", time.perf_counter() - _t_intake)
 
         # ── 1a. Capability Awareness Context ──
         if self.capabilities is not None:
@@ -720,8 +750,33 @@ class Brain:
             user_request = replace(user_request, goal=resolved_goal)
         user_request.metadata["active_entities"] = dict(self._active_entities)
 
+        # ── 1f. Simple-request fast path (Parts 3/7) ──
+        # Only confidently-simple, side-effect-free requests are dispatched here,
+        # and they still run through _execution_loop/_execute_step (permission,
+        # target binding, verification, cancellation, execution state all intact).
+        # It skips only project discovery, pre-plan memory retrieval, and the
+        # planning model call. Approval/correction/referent handling above still
+        # take precedence.
+        from .quickpath import build_fast_plan
+        fast_plan = build_fast_plan(user_request)
+        if fast_plan is not None:
+            context = ExecutionContext.from_request(user_request)
+            try:
+                res = self._execution_loop(
+                    context, user_request, on_progress=_progress, seed_plan=fast_plan,
+                )
+            except MambaCancelledError:
+                res = self._cancel_result(context, _progress)
+            else:
+                if _progress and res.status == ResultStatus.COMPLETED:
+                    _progress("Completed")
+            self._record_turn_context(user_request, res)
+            return res
+
         # ── 2. Context Assembly ──
+        _t_ctx = time.perf_counter()
         context = ExecutionContext.from_request(user_request)
+        timing.mark(user_request.metadata, "context_assembly", time.perf_counter() - _t_ctx)
 
         # ── 3. Memory Retrieval ──
         if _progress:
@@ -995,6 +1050,30 @@ class Brain:
             return request
         return None
 
+    def _project_context_needed(self, user_request: UserRequest) -> bool:
+        """Conservative gate: retain project discovery unless confidently generic."""
+        from .quickpath import is_clearly_project_irrelevant
+        return not is_clearly_project_irrelevant(
+            user_request.goal,
+            has_active_repository=bool(self._active_entities.get("repository")),
+            metadata=user_request.metadata,
+        )
+
+    def _memory_retrieval_wanted(self, user_request: UserRequest) -> bool:
+        """Conservative gate: skip pre-plan memory retrieval only where it cannot
+        change Mamba's expected behavior.
+
+        Explicit recall always retrieves. Pure arithmetic never needs prior
+        memories. Everything else retrieves (retain on uncertainty) so memory
+        behavior is unchanged for genuinely ambiguous requests — Spec Part 6.
+        """
+        from .quickpath import is_arithmetic, is_memory_recall
+        if is_memory_recall(user_request.goal):
+            return True
+        if is_arithmetic(user_request.goal):
+            return False
+        return True
+
     def _retrieve_memory(
         self, context: ExecutionContext, user_request: UserRequest,
     ) -> bool:
@@ -1007,44 +1086,51 @@ class Brain:
             or self._active_entities.get("repository")
             or ""
         )
-        if not project or "project_context" not in context.record.request.metadata:
-            try:
-                from .project import discover_project
-                proj_ctx = discover_project()
-                if not project:
-                    project = proj_ctx.name
-                context.record.request.metadata["project_context"] = proj_ctx.format_summary()
-                context.record.request.metadata["project_name"] = proj_ctx.name
-            except Exception:
-                pass
+        needs_project = self._project_context_needed(user_request)
+        if needs_project and (
+            not project or "project_context" not in context.record.request.metadata
+        ):
+            with timing.span(context.record.request.metadata, "project_discovery"):
+                try:
+                    from .project import discover_project
+                    proj_ctx = discover_project()
+                    if not project:
+                        project = proj_ctx.name
+                    context.record.request.metadata["project_context"] = proj_ctx.format_summary()
+                    context.record.request.metadata["project_name"] = proj_ctx.name
+                except Exception:
+                    pass
 
         if self.memory is None and self._memory_manager is None:
             return True
-        try:
-            if self._memory_manager is not None:
-                result = self._memory_manager.retrieve(
-                    query=user_request.goal,
-                    project=str(project),
-                    limit=5,
-                )
-            elif self.memory is not None:
-                query = MemoryQuery(query=user_request.goal)
-                result = self.memory.retrieve(query)
-            else:
-                result = None
+        if not self._memory_retrieval_wanted(user_request):
+            return True
+        with timing.span(context.record.request.metadata, "memory_retrieve"):
+            try:
+                if self._memory_manager is not None:
+                    result = self._memory_manager.retrieve(
+                        query=user_request.goal,
+                        project=str(project),
+                        limit=5,
+                    )
+                elif self.memory is not None:
+                    query = MemoryQuery(query=user_request.goal)
+                    result = self.memory.retrieve(query)
+                else:
+                    result = None
 
-            if result and result.entries:
-                context.record.request.metadata["retrieved_memories"] = [
-                    entry.content for entry in result.entries
-                ]
-        except Exception:
-            # Memory retrieval failure must not crash execution
-            pass
+                if result and result.entries:
+                    context.record.request.metadata["retrieved_memories"] = [
+                        entry.content for entry in result.entries
+                    ]
+            except Exception:
+                # Memory retrieval failure must not crash execution
+                pass
         return True
 
     def _execution_loop(
         self, context: ExecutionContext, user_request: UserRequest,
-        *, on_progress: Any = None,
+        *, on_progress: Any = None, seed_plan: ExecutionPlan | None = None,
     ) -> ExecutionResult:
         """Bounded observation-driven decision/execution loop.
 
@@ -1077,11 +1163,20 @@ class Brain:
             raise_if_cancelled()
 
             # ── Reason / Plan ──
-            if on_progress:
-                on_progress("Planning...")
-            plan = self._reason(context)
-            if plan is None:
-                return context.record.to_result()
+            if cycles_used == 1 and seed_plan is not None:
+                # Fast path: run the seeded single step through the SAME
+                # _execute_plan pipeline (capability/target-binding/permission/
+                # verify/cancel all preserved) and skip the planning model call.
+                context.transition_to(ExecutionState.PLANNING)
+                context.attach_plan(seed_plan)
+                context.transition_to(ExecutionState.EXECUTING)
+                plan = seed_plan
+            else:
+                if on_progress:
+                    on_progress("Planning...")
+                plan = self._reason(context)
+                if plan is None:
+                    return context.record.to_result()
 
             # Filter out steps that have already completed in prior cycles
             remaining_steps = [
@@ -1156,7 +1251,9 @@ class Brain:
             return context.record.to_result()
 
         # ── Memory Update ──
+        _t_memw = time.perf_counter()
         self._update_memory(context, user_request)
+        timing.mark(user_request.metadata, "memory_write", time.perf_counter() - _t_memw)
 
         # ── Final Response ──
         context.transition_to(ExecutionState.COMPLETED)
@@ -1172,7 +1269,9 @@ class Brain:
         """
         context.transition_to(ExecutionState.PLANNING)
         try:
+            _t_plan = time.perf_counter()
             plan = self.planner.plan(context)
+            timing.mark(context.record.request.metadata, "planning", time.perf_counter() - _t_plan)
             if plan is None or not plan.steps:
                 context.mark_failed("planner produced no execution steps")
                 return None
@@ -1338,22 +1437,38 @@ class Brain:
                 return _StepOutcome.FAILED, reason
 
         # ── Execute ──
-        try:
-            observation = self.executor.execute(step, context)
+        # Fast-path deterministic resolution: arithmetic was computed safely in
+        # quickpath (no eval) and this step already cleared the capability,
+        # target-binding and permission checks above; it still flows through the
+        # shared observation + verification handling below. Nothing is bypassed.
+        if step.metadata.get("fast_path") and "resolved_text" in step.metadata:
+            raise_if_cancelled()
+            observation = Observation(
+                step_id=step.id,
+                content=step.metadata["resolved_text"],
+                success=True,
+                metadata={"fast_path": True},
+            )
             context.add_observation(observation)
-        except MambaCancelledError:
-            # Cancellation must unwind, not be recorded as a step failure.
-            raise
-        except CoreError as exc:
-            obs = Observation(step_id=step.id, content=str(exc), success=False)
-            context.add_observation(obs)
-            context.mark_failed(str(exc))
-            return _StepOutcome.FAILED, str(exc)
-        except Exception as exc:
-            obs = Observation(step_id=step.id, content=str(exc), success=False)
-            context.add_observation(obs)
-            context.mark_failed(f"execution error: {exc}")
-            return _StepOutcome.FAILED, str(exc)
+        else:
+            try:
+                _t_exec = time.perf_counter()
+                observation = self.executor.execute(step, context)
+                timing.mark(context.record.request.metadata, "execution", time.perf_counter() - _t_exec)
+                context.add_observation(observation)
+            except MambaCancelledError:
+                # Cancellation must unwind, not be recorded as a step failure.
+                raise
+            except CoreError as exc:
+                obs = Observation(step_id=step.id, content=str(exc), success=False)
+                context.add_observation(obs)
+                context.mark_failed(str(exc))
+                return _StepOutcome.FAILED, str(exc)
+            except Exception as exc:
+                obs = Observation(step_id=step.id, content=str(exc), success=False)
+                context.add_observation(obs)
+                context.mark_failed(f"execution error: {exc}")
+                return _StepOutcome.FAILED, str(exc)
 
         # Honour a cancellation that arrived while the step ran (e.g. an
         # interrupted MCP call) BEFORE interpreting the observation, so a
@@ -1379,7 +1494,9 @@ class Brain:
         if self.verifier is not None and self._needs_verification(step, observation):
             if on_progress:
                 on_progress("Verifying...")
+            _t_ver = time.perf_counter()
             verified, reason = self._verify(step, observation)
+            timing.mark(context.record.request.metadata, "verification", time.perf_counter() - _t_ver)
             if verified:
                 # Surface the verified outcome explicitly, so the difference
                 # between "the action executed" and "the requested outcome was

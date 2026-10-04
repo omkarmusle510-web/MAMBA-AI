@@ -21,7 +21,12 @@ interface TranscriptEntry {
   isError?: boolean;
   emotion?: string;
   isSelected?: boolean;
+  /** Provisional streaming text — rendered as plain text, no highlighting. */
+  streaming?: boolean;
 }
+
+// Distance from the bottom within which the panel keeps following the tail.
+const TAIL_FOLLOW_PX = 48;
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[];
@@ -52,6 +57,7 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
   const listRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
+  const stickToTailRef = useRef(true);
 
   // Sync local entries with parent
   useEffect(() => setEntries(initialEntries), [initialEntries]);
@@ -77,13 +83,20 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Smooth scroll to new entry
+  // Smooth scroll to new entry. Streaming updates grow an entry's text rather
+  // than its count, so follow the tail from the rendered content and let the
+  // user opt out by scrolling up.
   useEffect(() => {
     const list = listRef.current;
-    if (list && initialEntries.length > entries.length) {
-      list.scrollTop = list.scrollHeight;
-    }
-  }, [entries, initialEntries.length]);
+    if (list && stickToTailRef.current) list.scrollTop = list.scrollHeight;
+  }, [entries]);
+
+  const handleListScroll = () => {
+    const list = listRef.current;
+    if (!list) return;
+    stickToTailRef.current =
+      list.scrollHeight - list.scrollTop - list.clientHeight < TAIL_FOLLOW_PX;
+  };
 
   // Resize handlers
   useEffect(() => {
@@ -261,7 +274,7 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
 
         {/* Content area */}
         {!isMinimized && (
-          <div className="transcript-list" ref={listRef}>
+          <div className="transcript-list" ref={listRef} onScroll={handleListScroll}>
             {filteredEntries.length === 0 ? (
               <motion.div
                 initial={{ opacity: 0 }}
@@ -311,11 +324,17 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
                     </button>
                   </div>
 
-                  {/* Entry content */}
-                  <div
-                    className="t-body"
-                    dangerouslySetInnerHTML={{ __html: highlightMatch(entry.content, searchTerm) }}
-                  />
+                  {/* Entry content — provisional stream text is a plain text
+                      node (no per-token regex/innerHTML churn, no highlight
+                      of text that is not yet the final answer). */}
+                  {entry.streaming ? (
+                    <div className="t-body is-streaming">{entry.content}</div>
+                  ) : (
+                    <div
+                      className="t-body"
+                      dangerouslySetInnerHTML={{ __html: highlightMatch(entry.content, searchTerm) }}
+                    />
+                  )}
                 </motion.div>
               ))
             )}

@@ -98,6 +98,11 @@ class GeminiModelProvider(BaseModelProvider):
         if supports_multimodal:
             capabilities["multimodal"] = True
             capabilities["image"] = True
+        # Streaming is advertised only when the installed SDK exposes it, so a
+        # missing surface degrades honestly to the complete invoke() path.
+        capabilities["streaming"] = bool(
+            getattr(self._client.models, "generate_content_stream", None)
+        )
 
         info = ModelInfo(
             provider="gemini",
@@ -108,25 +113,11 @@ class GeminiModelProvider(BaseModelProvider):
 
     def invoke(self, request: ModelRequest) -> ModelResponse:
         """Send a generate-content request to the Gemini API."""
-        if request.has_images and not self._supports_multimodal:
-            raise ModelProviderError(
-                "configured Gemini model does not support multimodal/image input"
-            )
+        self._require_model_for_input(request)
 
         model_to_use = request.model_id or self._model
-        contents = self._build_contents(request)
-        config = self._build_config(request.parameters, request.system_instruction)
-
         try:
-            from google.genai import types as genai_types
-
-            kwargs: dict[str, Any] = {
-                "model": model_to_use,
-                "contents": contents,
-            }
-            if config:
-                kwargs["config"] = genai_types.GenerateContentConfig(**config)
-
+            kwargs = self._build_generate_kwargs(request, model=model_to_use)
             response = self._client.models.generate_content(**kwargs)
         except ModelProviderError:
             raise
@@ -136,6 +127,81 @@ class GeminiModelProvider(BaseModelProvider):
             ) from exc
 
         return self._parse_response(response, fallback_model=model_to_use)
+
+    def stream(self, request: ModelRequest, on_text) -> ModelResponse:
+        """Stream generate-content chunks, pushing text deltas to ``on_text``.
+
+        The returned ``ModelResponse`` is the complete, authoritative answer;
+        the deltas are provisional presentation only.
+        """
+        from core.cancellation import MambaCancelledError, raise_if_cancelled
+
+        if not getattr(self._client.models, "generate_content_stream", None):
+            return self.invoke(request)  # degrade honestly to the complete path
+
+        self._require_model_for_input(request)
+        model_to_use = request.model_id or self._model
+        pieces: list[str] = []
+        try:
+            kwargs = self._build_generate_kwargs(request, model=model_to_use)
+            for chunk in self._client.models.generate_content_stream(**kwargs):
+                # Cancellation is not a provider failure: unwind, never retry.
+                raise_if_cancelled()
+                text = getattr(chunk, "text", "") or ""
+                if text:
+                    pieces.append(text)
+                    on_text(text)
+        except MambaCancelledError:
+            raise
+        except ModelProviderError:
+            raise
+        except Exception as exc:
+            # Keep the flattened message so router._classify_transient can read
+            # the "HTTP <code>" substring.
+            raise ModelProviderError(
+                self._sanitize(f"Gemini stream failed: {exc}")
+            ) from exc
+
+        content = "".join(pieces)
+        if not content:
+            raise ModelProviderError("Gemini stream returned empty content")
+        return ModelResponse(
+            content=content,
+            provider="gemini",
+            model=model_to_use,
+            success=True,
+            metadata={"streamed": True},
+        )
+
+    # ── Request validation / construction ──
+
+    def _require_model_for_input(self, request: ModelRequest) -> None:
+        """Reject image input on a text-only configuration (shared by invoke/stream)."""
+        if request.has_images and not self._supports_multimodal:
+            raise ModelProviderError(
+                "configured Gemini model does not support multimodal/image input"
+            )
+
+    def _build_generate_kwargs(
+        self, request: ModelRequest, *, model: str,
+    ) -> dict[str, Any]:
+        """Build the SDK generate-content kwargs for a request.
+
+        Shared by :meth:`invoke` and :meth:`stream` so both send the identical
+        request; behavior-preserving extraction from ``invoke``.
+        """
+        from google.genai import types as genai_types
+
+        contents = self._build_contents(request)
+        config = self._build_config(request.parameters, request.system_instruction)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "contents": contents,
+        }
+        if config:
+            kwargs["config"] = genai_types.GenerateContentConfig(**config)
+        return kwargs
 
     def _sanitize(self, message: str) -> str:
         """Strip API keys from any error message."""

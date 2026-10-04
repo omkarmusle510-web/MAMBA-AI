@@ -14,6 +14,7 @@ import re
 from typing import Any
 
 from core.capabilities import CapabilityRegistry
+from core.cancellation import MambaCancelledError
 from core.types import ExecutionPlan, PlanStep
 
 from models.protocols import ModelRouter
@@ -386,6 +387,8 @@ class PlanningAgent:
             else:
                 provider = self._router.route(request)
                 response = provider.invoke(request)
+        except MambaCancelledError:
+            raise  # cancellation is not a planning failure — never swallow/retry (Spec Parts 5-6)
         except Exception as exc:
             return AgentOutput(
                 success=False,
@@ -452,6 +455,8 @@ class PlanningAgent:
             if repair_resp.success and repair_resp.content and repair_resp.content.strip():
                 raw = _parse_plan_json(repair_resp.content)
                 return _validate_and_build_plan(raw)
+        except MambaCancelledError:
+            raise  # never turn cancellation into a silent repair retry
         except Exception:
             pass
         return None

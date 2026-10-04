@@ -14,13 +14,71 @@ existing ModelRequest / ModelInfo contracts already expose.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
+import re
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from .errors import ModelRoutingError
 from .protocols import ModelProvider
 from .types import ModelInfo, ModelRequest, ModelResponse
+
+
+# Total wall-time budget for the (rare) serial fallback across multiple
+# candidate providers, so a dead primary cannot stack several 60s socket
+# timeouts into a multi-minute stall. Env-tunable; per-provider socket
+# timeouts still apply beneath it.
+_TOTAL_TIMEOUT = float(os.environ.get("MAMBA_PROVIDER_TOTAL_TIMEOUT", "90"))
+
+# HTTP status classification (Spec Part 5). Providers flatten the status into
+# the exception message ("... HTTP 429 ..."); we read it back deterministically.
+_TRANSIENT_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_PERMANENT_STATUS = {400, 401, 403, 404, 405, 409, 413, 415, 422}
+_STATUS_RE = re.compile(r"HTTP (\d{3})")
+_TRANSIENT_WORDS = (
+    "timed out", "timeout", "overloaded", "rate limit", "too many requests",
+    "try again", "network error", "temporarily", "connection refused",
+    "connection aborted", "reset by peer",
+)
+_PERMANENT_WORDS = (
+    "invalid api key", "invalid_api_key", "unsupported model", "not found",
+    "model not found", "invalid request", "permission denied", "unauthorized",
+    "authentication", "bad request",
+)
+
+
+def _extract_status(exc: Exception) -> int | None:
+    match = _STATUS_RE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _classify_transient(exc: Exception) -> bool:
+    """True if the failure is worth one bounded fallback to the next candidate.
+
+    Permanent failures (bad key, unsupported model, invalid request) return
+    False so we stop immediately instead of burning every provider's timeout.
+    Cancellation is never transient. An uncertain provider error is treated as
+    transient-but-bounded so a genuine blip still gets one fallback without ever
+    hiding the original failure (Spec Part 5).
+    """
+    from core.cancellation import MambaCancelledError
+
+    if isinstance(exc, MambaCancelledError):
+        return False
+    status = _extract_status(exc)
+    if status is not None:
+        if status in _TRANSIENT_STATUS:
+            return True
+        if status in _PERMANENT_STATUS:
+            return False
+    text = str(exc).lower()
+    if any(word in text for word in _TRANSIENT_WORDS):
+        return True
+    if any(word in text for word in _PERMANENT_WORDS):
+        return False
+    return True
 
 _MULTIMODAL_CAPABILITY_KEYS = ("multimodal", "image")
 
@@ -39,6 +97,15 @@ def _routing_hint(metadata: dict[str, Any], key: str) -> str | None:
 def _supports_multimodal(info: ModelInfo) -> bool:
     """Whether a provider's advertised capabilities cover image/multimodal input."""
     return any(bool(info.capabilities.get(key)) for key in _MULTIMODAL_CAPABILITY_KEYS)
+
+
+def _provider_supports_streaming(info: ModelInfo) -> bool:
+    """Whether a provider advertises streaming.
+
+    Truthiness, not membership: an explicit ``{"streaming": False}`` must not
+    be treated as capable.
+    """
+    return bool(info.capabilities.get("streaming"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,38 +244,115 @@ class DefaultModelRouter:
         return RoutingDecision(chosen, reason)
 
     def invoke(self, request: ModelRequest) -> ModelResponse:
-        """Invoke a provider for `request` with automatic fallback among viable candidates."""
+        """Invoke a provider with bounded fallback among viable candidates.
+
+        Cancellation is re-raised immediately and NEVER triggers a fallback to
+        another provider (Spec Part 5). A permanent provider failure stops the
+        loop at once; only transient failures advance to the next candidate, and
+        the whole fallback is bounded by MAMBA_PROVIDER_TOTAL_TIMEOUT so a dead
+        provider cannot stack multiple socket timeouts. The original failure is
+        always surfaced (never masked) when nothing succeeds.
+        """
+        from core.cancellation import MambaCancelledError
+
         candidates = self.route_candidates(request)
         last_error: Exception | None = None
         last_response: ModelResponse | None = None
+        attempts = 0
+        deadline = time.monotonic() + _TOTAL_TIMEOUT if len(candidates) > 1 else None
 
         for i, provider in enumerate(candidates):
+            attempts += 1
             try:
                 response = provider.invoke(request)
-                if response.success:
-                    if i > 0:
-                        meta = dict(response.metadata)
-                        meta["fallback_from_primary"] = True
-                        meta["fallback_attempt"] = i
-                        return ModelResponse(
-                            content=response.content,
-                            provider=response.provider,
-                            model=response.model,
-                            success=True,
-                            error=None,
-                            metadata=meta,
-                        )
-                    return response
-                last_response = response
+            except MambaCancelledError:
+                raise
             except Exception as exc:
                 last_error = exc
+                if not _classify_transient(exc):
+                    raise  # permanent: stop, do not burn the remaining candidates
+                if deadline is not None and time.monotonic() >= deadline:
+                    break  # bounded transient fallback
                 continue
+
+            if response.success:
+                if i > 0:
+                    meta = dict(response.metadata)
+                    meta["fallback_from_primary"] = True
+                    meta["fallback_attempt"] = i
+                    meta["provider_attempts"] = attempts
+                    meta["primary_provider_error_class"] = "transient"
+                    return ModelResponse(
+                        content=response.content,
+                        provider=response.provider,
+                        model=response.model,
+                        success=True,
+                        error=None,
+                        metadata=meta,
+                    )
+                return response
+            last_response = response
 
         if last_response is not None:
             return last_response
         if last_error is not None:
             raise last_error
         raise ModelRoutingError("all candidate model providers failed invocation")
+
+    def stream(self, request: ModelRequest, on_text: Callable[[str], None]) -> ModelResponse:
+        """Stream from the first viable candidate and return the complete response.
+
+        Phase 3's fallback rules apply, plus one streaming-specific rule: once a
+        provider has produced any output, a failure is re-raised instead of
+        retried on another provider. Switching mid-answer would splice two
+        providers' text into one reply, which is worse than failing. Cancellation
+        is re-raised immediately and never falls back. A candidate that cannot
+        stream degrades honestly to ``invoke()`` (the whole answer arrives as one
+        delta) rather than being skipped or faked.
+        """
+        from core.cancellation import MambaCancelledError
+
+        candidates = self.route_candidates(request)
+        last_error: Exception | None = None
+        last_response: ModelResponse | None = None
+        deadline = time.monotonic() + _TOTAL_TIMEOUT if len(candidates) > 1 else None
+
+        for provider in candidates:
+            emitted = False
+
+            def _tracked(delta: str, _cb=on_text) -> None:
+                nonlocal emitted
+                emitted = True
+                _cb(delta)
+
+            try:
+                if (
+                    _provider_supports_streaming(self._provider_info(provider))
+                    and hasattr(provider, "stream")
+                ):
+                    return provider.stream(request, _tracked)
+                response = provider.invoke(request)  # complete-path degrade
+                if response.success:
+                    on_text(response.content)
+                    return response
+                last_response = response
+            except MambaCancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if emitted:
+                    raise  # never switch providers after the first token
+                if not _classify_transient(exc):
+                    raise  # permanent: stop, do not burn the remaining candidates
+                if deadline is not None and time.monotonic() >= deadline:
+                    break  # bounded transient fallback
+                continue
+
+        if last_response is not None:
+            return last_response
+        if last_error is not None:
+            raise last_error
+        raise ModelRoutingError("all candidate model providers failed streaming")
 
     def _require_multimodal_if_needed(
         self, provider: ModelProvider, needs_multimodal: bool, subject: str

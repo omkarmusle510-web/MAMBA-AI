@@ -100,6 +100,8 @@ class ExecutionRecord:
                 f"cannot build result while execution is in state {self.state.value}"
             )
 
+        latency = self.request.metadata.get("latency_ms")
+        result_metadata = {"latency_ms": latency} if latency else {}
         return ExecutionResult(
             execution_id=self.id,
             status=status,
@@ -107,6 +109,7 @@ class ExecutionRecord:
             observations=tuple(self.observations),
             output=output,
             error=self.error,
+            metadata=result_metadata,
         )
 
     def to_dict(self) -> dict[str, Any]:

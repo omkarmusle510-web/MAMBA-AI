@@ -160,6 +160,7 @@ class ExecutionResult:
     observations: tuple[Observation, ...]
     output: str | None = None
     error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -169,6 +170,7 @@ class ExecutionResult:
             "observations": [observation.to_dict() for observation in self.observations],
             "output": self.output,
             "error": self.error,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -182,4 +184,5 @@ class ExecutionResult:
             ),
             output=data.get("output"),
             error=data.get("error"),
+            metadata=dict(data.get("metadata", {})),
         )

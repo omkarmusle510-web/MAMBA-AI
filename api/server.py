@@ -14,6 +14,8 @@ import base64
 import functools
 import json
 import logging
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -37,6 +39,13 @@ _MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024
 # Sentinel the /live receiver enqueues when the socket closes, so the turn loop
 # can distinguish "client gone" from an ordinary inbound message.
 _DISCONNECT = object()
+
+# Streamed deltas are coalesced so a 200-chunk answer does not become 200
+# WebSocket frames (Spec Part 15). The first delta always flushes immediately;
+# later ones accumulate for this window. Tunable for diagnostics only.
+_DELTA_COALESCE_SECONDS = max(
+    0.0, float(os.environ.get("MAMBA_STREAM_COALESCE_MS", "40")) / 1000.0
+)
 
 
 def _looks_like_wav(data: bytes) -> bool:
@@ -204,18 +213,63 @@ def create_app(
             Milestones are emitted on the single worker thread; they are
             marshalled back onto the event loop with ``run_coroutine_threadsafe``
             and fire-and-forget so the worker never blocks on socket I/O.
+
+            ``stage`` names the execution phase (Spec Part 6: progress is a
+            separate channel from text deltas); ``milestone`` is kept for the
+            existing clients.
             """
 
             def on_progress(milestone: str) -> None:
                 try:
                     asyncio.run_coroutine_threadsafe(
-                        websocket.send_json({"type": "progress", "milestone": milestone}),
+                        websocket.send_json({
+                            "type": "progress",
+                            "milestone": milestone,
+                            "stage": milestone,
+                        }),
                         loop,
                     )
                 except Exception:
                     pass
 
             return on_progress
+
+        def make_stream_sink():
+            """Build a worker-thread-safe sink that coalesces provisional deltas.
+
+            Deltas are incremental UI text only. The authoritative frame is the
+            ``transcription``/``role=model`` frame the turn handler sends once
+            :meth:`MambaRuntime.run` returns its ``ExecutionResult``.
+            """
+            buf: list[str] = []
+            last_flush = [0.0]
+
+            def _send(batch: str):
+                try:
+                    return asyncio.run_coroutine_threadsafe(
+                        websocket.send_json({"type": "delta", "text": batch}),
+                        loop,
+                    )
+                except Exception:
+                    return None
+
+            def flush():
+                """Drain the buffer; returns the send future so the caller can
+                await it before the authoritative frame (frame order)."""
+                if not buf:
+                    return None
+                batch = "".join(buf)
+                buf.clear()
+                last_flush[0] = time.monotonic()
+                return _send(batch)
+
+            def on_delta(text: str) -> None:
+                buf.append(text)
+                if time.monotonic() - last_flush[0] >= _DELTA_COALESCE_SECONDS:
+                    flush()
+
+            on_delta.flush = flush  # type: ignore[attr-defined]
+            return on_delta
 
         async def _run_cancellable(fn: Any) -> Any:
             """Offload ``fn(token)`` to the worker and await it, honouring cancel.
@@ -303,6 +357,7 @@ def create_app(
                         continue
 
                 on_progress_sync = make_progress()
+                stream_sink: Any = None
 
                 if input_modality == "voice":
                     # Voice path: transcription + execution happen together off
@@ -346,12 +401,37 @@ def create_app(
                     })
                     await websocket.send_json({"type": "status", "status": "thinking"})
 
-                    def _text_turn(token: CancellationToken, _prompt: str = prompt_text, _prog=on_progress_sync):
-                        return runtime.run(_prompt, on_progress=_prog, cancel_token=token)
+                    # Text turns stream provisional deltas. The voice branch
+                    # deliberately does not: it keeps returning one complete
+                    # transcription + one audio blob (Spec Part 11, Phase 5
+                    # owns voice).
+                    stream_sink = make_stream_sink()
+
+                    def _text_turn(token: CancellationToken, _prompt: str = prompt_text, _prog=on_progress_sync, _sink=stream_sink):
+                        return runtime.run(
+                            _prompt, on_progress=_prog, cancel_token=token, stream_sink=_sink,
+                        )
 
                     result = await _run_cancellable(_text_turn)
 
                 formatted = _format_execution_response(result)
+
+                # Cancellation is terminal: the turn is reported as cancelled
+                # and can never be presented as a completed answer. Buffered
+                # provisional deltas are dropped rather than finalized.
+                if result is not None and result.status == ResultStatus.CANCELLED:
+                    await websocket.send_json({"type": "cancelled"})
+                    await websocket.send_json({"type": "status", "status": "listening"})
+                    continue
+
+                # Drain coalesced deltas before the authoritative frame so the
+                # UI always sees deltas → complete in that order.
+                if stream_sink is not None:
+                    _flush = getattr(stream_sink, "flush", None)
+                    pending = _flush() if callable(_flush) else None
+                    if pending is not None:
+                        with suppress(Exception):
+                            await asyncio.wrap_future(pending)
 
                 # Voice turns: speak the outcome back over the socket as a
                 # complete audio blob (the TTS provider returns whole audio,

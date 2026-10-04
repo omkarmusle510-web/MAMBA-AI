@@ -241,6 +241,7 @@ Permission metadata (authoritative, from `DESKTOP_OPERATIONS`): launching and re
   6. stable provider order as final tie-break.
   
   An unsatisfiable explicit requirement raises `ModelRoutingError` honestly instead of silently substituting another provider. `route_with_reason()` exposes the decision for explainability.
+- **Streaming** (`DefaultModelRouter.stream(request, on_text)`): the same candidate policy as `invoke`, plus a first-token gate — no provider switch after any delta has been emitted, cancellation always re-raised. Providers that do not advertise `capabilities["streaming"]` degrade to `invoke()`. Optional surface: `BaseModelProvider.stream()` raises unless the provider implements it. See §23.4.
 
 Voice models are separate: STT `whisper-large-v3-turbo` via Groq (`GROQ_STT_MODEL`), TTS `@cf/deepgram/aura-1` via Cloudflare (`CLOUDFLARE_TTS_MODEL`).
 
@@ -537,7 +538,7 @@ The Python backend itself is stateless across restarts except for `.mamba/` on d
 | `GET /health` | Liveness probe (`{"status": "ok", "runtime": "mamba"}`); used by `BackendManager` |
 | `POST /api/chat` | `{"input", "metadata?"}` → `ChatResponse{execution_id, status, output, error, awaiting_approval, reason}` |
 | `POST /api/voice` | multipart audio upload → `VoiceInterface.process_voice_input(..., speak_response=False)` → prompt + result |
-| `WS /live` | bidirectional. **In:** `{"type": "text", "text"}`, `{"type": "audio", "format": "wav", "audio": "<base64 WAV>"}` (RIFF/WAVE framing validated), `{"type": "video"}` (acknowledged, not processed). **Out:** `transcription` (role `user`/`model`), `progress` (milestones), `status` (`connected`/`thinking`/`permission`/`listening`), `permission_request`, `audio` (complete synthesized reply, `format: "mp3"`), `turnComplete`, `error`. There is **no** inbound `permission_response` type: an approval is delivered as an ordinary `text` message (`"yes"`/`"no"`), so the pause is resolved by the same intake path any other input uses |
+| `WS /live` | bidirectional. **In:** `{"type": "text", "text"}`, `{"type": "audio", "format": "wav", "audio": "<base64 WAV>"}` (RIFF/WAVE framing validated), `{"type": "video"}` (acknowledged, not processed), `{"type": "cancel"}` (cancels the in-flight turn; a no-op when none is running). **Out:** `transcription` (role `user`/`model`, the model frame being the **authoritative** turn text), `delta` (provisional streamed text, `/live` only, coalesced), `progress` (milestones), `status` (`connected`/`thinking`/`permission`/`cancelling`/`listening`), `permission_request`, `audio` (complete synthesized reply, `format: "mp3"`), `cancelled` (terminal — a cancelled turn emits no model frame and no `turnComplete`), `turnComplete`, `error`. There is **no** inbound `permission_response` type: an approval is delivered as an ordinary `text` message (`"yes"`/`"no"`), so the pause is resolved by the same intake path any other input uses |
 | `GET/POST /api/settings` | UI preferences ↔ `.mamba/settings.json` |
 | `GET/POST /api/reminders` | reminders ↔ `.mamba/reminders.json` |
 
@@ -630,6 +631,123 @@ execution is bounded — is enumerated as **15 numbered invariants** with their 
 points in [SECURITY.md](SECURITY.md) §3. Rules 8, 9, and 12 above are where those meet the
 layer boundaries.
 
+### 23.3 Request-latency controls
+
+Phase 3 added three conservative, measurement-driven latency controls. None of them
+creates a second decision-maker: the **planner is not the authority and the fast path is
+also not the authority** — permissions, verification, cancellation, execution state and
+memory capture all still run on every path.
+
+1. **Project-discovery relevance gate** (`core/quickpath.py::is_clearly_project_irrelevant`,
+   consumed by `Brain._project_context_needed`). Uncached `discover_project()` (an FS walk
+   plus four git subprocesses, ~458–607 ms on this machine) was paid by *every* request.
+   The gate skips it only for a request that is **confidently** project-irrelevant
+   (deterministic arithmetic, time queries, greeting-shaped, memory-write). Anything
+   uncertain, project/coding/tool/browser-relevant, or any request with an active
+   repository retains discovery. Safe-by-default: the classifier returns `False` (keep
+   discovery) whenever it is not sure.
+
+2. **Arithmetic-only fast path** (`core/quickpath.py::build_fast_plan`, dispatched in
+   `Brain._run_impl` before context assembly and executed through the normal
+   `Brain._execution_loop(seed_plan=…)` → `_execute_step()` pipeline). It resolves **pure
+   additive/multiplicative arithmetic** deterministically with a safe `ast` evaluator (no
+   `eval`; exponentiation excluded) and answers without a planning model call. A broader
+   simple-Q&A fast path (short single-verb requests) was tried and **removed** — it
+   answered goals locally that other subsystems assert must reach the planner, becoming a
+   de-facto "second brain" and regressing 6 tests. The fast path still honours the ambient
+   cancellation token and the permission evaluation.
+
+3. **Provider routing / bounded fallback** (`models/router.py::DefaultModelRouter.invoke`).
+   Candidate providers are tried serially. Cancellation is re-raised immediately and never
+   triggers a fallback; a **permanent** failure (bad key, unsupported/absent model, invalid
+   request — HTTP 400/401/403/404/405/409/413/415/422 or matching phrases) stops the loop
+   at once; a **transient** failure (HTTP 408/425/429/5xx or timeout/rate-limit/network)
+   advances to the next candidate, bounded by `MAMBA_PROVIDER_TOTAL_TIMEOUT`. The original
+   failure is always surfaced when nothing succeeds. `agents/planning_agent.py` re-raises
+   `MambaCancelledError` at both of its model-invocation sites so a cancel is never
+   recorded as a planning failure or retried.
+
+**Environment variables:**
+
+| Var | Default | Effect |
+|---|---|---|
+| `MAMBA_TIMING` | off | When truthy, `core/timing.py` accumulates per-phase durations (ms) into `request.metadata["latency_ms"]`, surfaced on `ExecutionResult.metadata["latency_ms"]`. Durations only — no user content, credentials, page or memory text. No-op (zero cost) when disabled. |
+| `MAMBA_PROVIDER_TOTAL_TIMEOUT` | `90` | Wall-clock budget (seconds) for the serial multi-provider fallback, so a dead primary cannot stack several socket timeouts into a multi-minute stall. |
+
+**Measured effect** (deterministic bench `tests/bench_phase3_latency.py`, ~480 ms discovery):
+arithmetic 1048 → **5.9 ms (−99.4%)**, memory-write 1049 → **567 ms (−45.9%)**; every
+project-relevant or uncertain class is unchanged by design. Replanning stayed at one cycle
+across all classes, so the planning-cycle cap (10) was left untouched, and global
+`discover_project()` caching was **not** added (forbidden by the no-global-caching rule and
+stale-context risk). See `docs/superpowers/plans/2026-10-03-phase3-latency-optimization.md`
+for the full before/after table.
+
+---
+
+### 23.4 Streaming (Phase 4)
+
+Phase 4 is about **perceived speed**: the answer text arrives incrementally while the turn is
+still running. It is explicitly **not** a latency change (Phase 3 owns that) and it adds no new
+decision-maker.
+
+**One rule governs everything below: streamed text is provisional.** Deltas are presentation
+only. `ExecutionResult` / `ModelResponse` remain the sole authority, and the transport's final
+model frame — not the last delta — is what the UI renders as the answer.
+
+The chain, with exactly one attach point per layer:
+
+1. **Providers** (`models/providers/gemini.py`, `groq.py`, `nvidia.py`) implement
+   `stream(request, on_text) -> ModelResponse`, declared as an optional surface on
+   `BaseModelProvider` (`models/provider.py`) which raises by default. A streaming provider
+   **must return the complete response**; deltas never replace it. Capability is advertised in
+   the open `ModelInfo.capabilities` dict as `streaming` (checked by truthiness, never
+   membership), so no type was widened. Groq/NVIDIA parse `text/event-stream` with the shared
+   stdlib parser `models/providers/_openai_sse.py::parse_sse_delta`; NVIDIA additionally
+   collects `reasoning_content` without ever emitting it, matching `invoke()` so a
+   reasoning-only model does not lose its answer.
+2. **Router** (`models/router.py::DefaultModelRouter.stream`) reuses the Phase 3 candidate
+   ordering and `_classify_transient`, adding a **first-token gate**: a failure before any
+   delta may fall back to the next provider, a failure after the first delta is re-raised
+   (switching providers mid-answer would splice two different completions), and cancellation
+   is always re-raised, never a fallback. Providers without the capability degrade to
+   `invoke()` and emit the complete text as a single delta — honest, not fake streaming.
+3. **Core** (`core/streaming.py`) carries the sink the same way `core/cancellation.py` carries
+   the token: a dependency-free ambient `ContextVar` set by `Brain.run(stream_sink=…)`,
+   forwarded by `MambaRuntime.run`, and read by the one place that produces answer prose —
+   `skills/analyze.py`. `_run`/`_run_impl`/`_execution_loop`/`_execute_step` are untouched, and
+   no other skill was made streamable.
+4. **Transport** (`api/server.py`, `/live` only — the existing Mamba UI path; `/api/chat` is
+   byte-identical) coalesces deltas into `{"type":"delta","text":…}` frames (first delta
+   flushes immediately, later ones over `MAMBA_STREAM_COALESCE_MS`) via
+   `run_coroutine_threadsafe`, because the whole core runs synchronously on the single
+   `mamba-worker` thread and a generator cannot cross that boundary. Before the authoritative
+   frame the pending flush is awaited, so frame order is deterministic: deltas → model frame →
+   `turnComplete`. A cancelled turn sends `{"type":"cancelled"}` and **no** model frame.
+5. **UI** (`src/audio.ts`, `src/MambaApp.tsx`, `src/TranscriptPanel.tsx`, `src/Composer.tsx`)
+   renders one provisional bubble per turn, rAF-coalesced, replaced wholesale by the model
+   frame. `delta` frames are only forwarded while a turn is in flight (opened by the server's
+   `thinking` status, closed by `turnComplete`/`cancelled`/`error`), and a turn that ends
+   without authoritative text **discards** its provisional bubble. The frontend never marks a
+   turn approved, verified, successful or completed.
+
+**Safety invariants kept:** streaming bypasses no permission check (an approval prompt still
+ends the turn pending visual confirmation), no verification, no target binding, no cancellation
+and no execution-state transition. Partial output is never persisted to memory as a completed
+answer — only the final `ExecutionResult` is.
+
+**Environment variables (added by Phase 4):**
+
+| Var | Default | Effect |
+|---|---|---|
+| `MAMBA_STREAM_COALESCE_MS` | `40` | Minimum interval between `/live` delta frames. `0` flushes every delta; larger values trade granularity for fewer socket writes. |
+| `MAMBA_REAL_PROVIDER_TESTS` | off | Opt-in switch for `tests/test_phase4_real_provider.py`, which makes real (paid) provider calls. Never runs with the normal suite. |
+
+**Real-provider finding (2026-10-04):** against the live Gemini endpoint the answer arrived as
+a **single** chunk while still satisfying `"".join(deltas) == response.content`. Chunk
+granularity is provider-controlled, so the paid test asserts parity and "at least one delta"
+only; multi-delta behaviour is asserted deterministically by the SSE/chunk unit tests. The
+configured Groq key returned HTTP 401, so the Groq path remains unvalidated against the live API.
+
 ---
 
 ## Appendix A — Repository Map
@@ -639,10 +757,16 @@ app.py ..................... entry point: CLI / voice / --server, create_runtime
 api/ ....................... FastAPI transport adapter (server.py)
 core/ ...................... runtime.py (boundary), brain.py (lifecycle),
                              capabilities.py (14-capability registry),
-                             project.py (discovery), context/state/types
+                             project.py (discovery), quickpath.py (shared
+                             latency classifier + fast path + safe arithmetic),
+                             timing.py (env-gated latency spans),
+                             streaming.py (ambient provisional-delta sink),
+                             context/state/types
 agents/ .................... planning_agent.py, planner.py (live);
                              registry.py, tools/*, server.py (legacy, unused)
-models/ .................... router.py, providers/ (nvidia, groq, gemini)
+models/ .................... router.py (invoke + stream/first-token gate),
+                             providers/ (nvidia, groq, gemini + shared
+                             _openai_sse.py delta parser)
 skills/ .................... capability skills + mixed task executor (intent routing)
 tools/ ..................... external-action handlers (filesystem, terminal,
                              desktop incl. cross-app adapters, system, screen, web,
@@ -657,15 +781,21 @@ electron/ .................. desktop shell (main, backend/frontend/lifecycle/
                              tray/hotkey managers, preload, static server,
                              wakeKws.cjs + sherpa/ runtime)
 src/ ....................... React UI (MambaApp, FloatingOrb, orb shaders, audio WS
-                             session with VAD + barge-in, wake/ engines + controller,
+                             session with VAD + barge-in, provisional streaming
+                             transcript + turn cancel, wake/ engines + controller,
                              settings)
 public/wake/ ............... pinned offline KWS models + VERSIONS.md (Apache-2.0)
 docs/ ...................... ARCHITECTURE, SECURITY, SKILLS, MEMORY,
                              VOICE_INTERFACE, PROJECT_UNDERSTANDING
-tests/ ..................... 16 files. Observed on 2026-10-03: 253 passed, 5 failing
-                             (pre-existing browser-capability cases that need a real
-                             MCP/Chrome environment), 9 skipped. Real-desktop cases
-                             opt in via MAMBA_REAL_DESKTOP_TESTS=1
+tests/ ..................... Observed on 2026-10-04 (incl. Phase 3 latency and
+                             Phase 4 streaming/transport suites): 331 passed,
+                             5 failing, 11 skipped. The 5 failures are
+                             pre-existing browser-capability cases that need a real
+                             MCP/Chrome environment (independently re-confirmed as
+                             failing at the committed HEAD source, not a Phase 3
+                             regression). Real-desktop cases
+                             opt in via MAMBA_REAL_DESKTOP_TESTS=1; real (paid)
+                             provider streaming via MAMBA_REAL_PROVIDER_TESTS=1
 .mamba/ .................... runtime data (memory.db, settings.json,
                              reminders.json) — created at runtime, gitignored
 ```

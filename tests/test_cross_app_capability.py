@@ -658,7 +658,7 @@ def test_application_registry_is_extensible_without_core_changes():
 def test_real_multi_application_launch_and_bind():
     """Launch several representative applications and bind each one's window."""
     driver = CrossAppDriver()
-    seen: dict[str, str] = {}
+    launched: list[WindowBinding] = []
 
     for app_id in (APP_NOTEPAD, APP_CALCULATOR, APP_FILE_EXPLORER, APP_VSCODE):
         adapter = driver.registry.get(app_id)
@@ -671,10 +671,10 @@ def test_real_multi_application_launch_and_bind():
             pytest.skip(f"could not launch {adapter.display_name}: {exc}")
         assert driver.is_bound(target), f"{app_id} window did not verify"
         assert driver.identify(target).app_id == app_id
-        seen[app_id] = target.title
+        launched.append(target)
 
-    # Clean up the windows this test opened (test-only; Mamba has no close action).
-    _close_windows(seen, driver)
+    # Clean up only the exact windows this test launched and recorded.
+    _close_windows(launched, driver)
 
 
 def test_real_calculator_display_observation():
@@ -694,7 +694,7 @@ def test_real_calculator_display_observation():
         assert error
     else:
         assert isinstance(content, str)
-    _close_windows({APP_CALCULATOR: target.title}, driver)
+    _close_windows([target], driver)
 
 
 @pytest.mark.skipif(
@@ -712,21 +712,75 @@ def test_real_file_explorer_opens_requested_folder():
     assert driver.is_bound(target)
     assert driver.identify(target).app_id == APP_FILE_EXPLORER
     assert target.title  # folder windows carry the folder name in the title
-    _close_windows({APP_FILE_EXPLORER: target.title}, driver)
+    _close_windows([target], driver)
 
 
-def _close_windows(titles: dict[str, str], driver: CrossAppDriver) -> None:
-    """Close windows opened by the real-desktop tests (test-only cleanup)."""
+def _close_windows(targets: list[WindowBinding], driver: CrossAppDriver) -> None:
+    """Close only the exact windows a test recorded launching (test-only cleanup).
+
+    Each target is the binding captured at launch time. It is revalidated
+    against the live window (same handle, same PID, same application identity)
+    immediately before WM_CLOSE is posted. Windows that were not recorded —
+    including pre-existing user windows of the same application — are never
+    enumerated for closing, and no confirmation key is ever sent: a window
+    with unsaved changes keeps its own prompt and stays open.
+    """
     try:
         import win32con
         import win32gui
-
-        for app_id, title in titles.items():
-            for window in driver.find(app_id):
-                try:
-                    win32gui.PostMessage(window.hwnd, win32con.WM_CLOSE, 0, 0)
-                except Exception:
-                    pass
-                time.sleep(0.2)
     except Exception:
-        pass
+        return
+    for target in targets:
+        try:
+            if not driver.is_bound(target):
+                continue
+            win32gui.PostMessage(target.hwnd, win32con.WM_CLOSE, 0, 0)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+
+# ── test cleanup safety: recorded bindings only, revalidated ───────────────
+
+
+def test_cleanup_helper_closes_only_recorded_windows(monkeypatch):
+    """F4: pre-existing windows of the same application are never cleaned up."""
+    win32gui = pytest.importorskip("win32gui")
+    registry = default_application_registry()
+    driver = FakeApplicationDriver(registry.all())
+    launched = driver.open_window(
+        APP_NOTEPAD, "Untitled - Notepad", process="Notepad.exe", cls="Notepad"
+    )
+    pre_existing = driver.open_window(
+        APP_NOTEPAD, "kept - Notepad", process="Notepad.exe", cls="Notepad"
+    )
+
+    posted: list[int] = []
+    monkeypatch.setattr(win32gui, "PostMessage", lambda hwnd, *args: posted.append(hwnd))
+
+    _close_windows([launched], driver)
+
+    assert posted == [launched.hwnd]
+    assert pre_existing.hwnd not in posted
+
+
+def test_cleanup_helper_skips_windows_that_no_longer_match(monkeypatch):
+    """F4: a recorded binding that went stale is dropped, never retargeted."""
+    win32gui = pytest.importorskip("win32gui")
+    registry = default_application_registry()
+    driver = FakeApplicationDriver(registry.all())
+    recorded = driver.open_window(
+        APP_NOTEPAD, "Untitled - Notepad", process="Notepad.exe", cls="Notepad"
+    )
+    replacement = driver.open_window(
+        APP_NOTEPAD, "Untitled - Notepad", process="Notepad.exe", cls="Notepad"
+    )
+    driver.windows[APP_NOTEPAD] = [replacement]  # the recorded handle is gone
+
+    posted: list[int] = []
+    monkeypatch.setattr(win32gui, "PostMessage", lambda hwnd, *args: posted.append(hwnd))
+
+    _close_windows([recorded], driver)
+
+    assert posted == []
+    assert replacement.hwnd not in posted

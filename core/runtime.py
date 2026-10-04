@@ -37,18 +37,21 @@ class MambaRuntime:
         *,
         on_progress: Callable[[str], None] | None = None,
         cancel_token: Any = None,
+        stream_sink: Callable[[str], None] | None = None,
     ) -> ExecutionResult:
         """Execute a user request through the complete Mamba Core lifecycle.
 
-        Both ``on_progress`` and ``cancel_token`` are optional. When neither is
-        supplied this delegates to ``Brain.run(request)`` exactly as before, so
-        existing callers and test doubles are unaffected.
+        All three keyword arguments are optional. When none are supplied this
+        delegates to ``Brain.run(request)`` exactly as before, so existing
+        callers and test doubles are unaffected.
         """
         kwargs: dict[str, Any] = {}
         if on_progress is not None:
             kwargs["on_progress"] = on_progress
         if cancel_token is not None:
             kwargs["cancel_token"] = cancel_token
+        if stream_sink is not None:
+            kwargs["stream_sink"] = stream_sink
         return self.brain.run(request, **kwargs)
 
     def shutdown(self) -> None:

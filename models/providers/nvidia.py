@@ -24,6 +24,7 @@ from ..types import (
     ModelResponse,
     ModelTextPart,
 )
+from ._openai_sse import DONE, parse_sse_delta
 
 _DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 _DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
@@ -55,6 +56,7 @@ class NVIDIAModelProvider(BaseModelProvider):
         timeout: int = _DEFAULT_TIMEOUT_SECONDS,
         supports_multimodal: bool = False,
         _http_post: Any = None,
+        _http_stream: Any = None,
     ) -> None:
         resolved_key = (
             api_key
@@ -74,10 +76,12 @@ class NVIDIAModelProvider(BaseModelProvider):
         self._supports_multimodal = supports_multimodal
         # Injectable HTTP boundary for testing without network access.
         self._http_post = _http_post or self._default_http_post
+        self._http_stream = _http_stream or self._default_http_stream
 
         capabilities: dict[str, Any] = {
             "chat": True,
             "text_generation": True,
+            "streaming": True,
         }
         if supports_multimodal:
             capabilities["multimodal"] = True
@@ -119,6 +123,88 @@ class NVIDIAModelProvider(BaseModelProvider):
             ) from exc
 
         return self._parse_response(raw, fallback_model=model_to_use)
+
+    def stream(self, request: ModelRequest, on_text) -> ModelResponse:
+        """Stream chat-completion deltas to ``on_text`` and return the full answer.
+
+        Reasoning tokens are collected but never forwarded: only the answer
+        text reaches a user-facing sink. When a model returns reasoning and no
+        answer, the reasoning is used as the final content exactly as
+        :meth:`invoke` does, so streaming cannot lose an answer the complete
+        path would have returned.
+        """
+        from core.cancellation import MambaCancelledError, raise_if_cancelled
+
+        if request.has_images and not self._supports_multimodal:
+            raise ModelProviderError(
+                "configured NVIDIA model does not support multimodal/image input"
+            )
+
+        model_to_use = request.model_id or self._model
+        messages = self._build_messages(request)
+        body = self._build_body(model_to_use, messages, request.parameters, stream=True)
+        pieces: list[str] = []
+        reasoning: list[str] = []
+
+        try:
+            lines = self._http_stream(
+                url=f"{self._base_url}/chat/completions",
+                headers=self._stream_headers(),
+                body=body,
+                timeout=self._timeout,
+            )
+            for line in lines:
+                # Cancellation is not a provider failure: unwind, never retry.
+                raise_if_cancelled()
+                delta = parse_sse_delta(line)
+                if delta == DONE:
+                    break
+                if delta:
+                    pieces.append(delta)
+                    on_text(delta)
+                    continue
+                think = parse_sse_delta(line, "reasoning_content")
+                if think:
+                    reasoning.append(think)
+        except MambaCancelledError:
+            raise
+        except ModelProviderError:
+            raise
+        except urllib.error.HTTPError as exc:
+            raise ModelProviderError(self._http_error_message(exc)) from exc
+        except Exception as exc:
+            raise ModelProviderError(
+                self._sanitize(f"NVIDIA API stream failed: {exc}")
+            ) from exc
+
+        content = "".join(pieces) or "".join(reasoning)
+        if not content:
+            raise ModelProviderError("NVIDIA stream returned empty content")
+
+        return ModelResponse(
+            content=content,
+            provider="nvidia",
+            model=model_to_use,
+            success=True,
+            metadata={"streamed": True},
+        )
+
+    def _stream_headers(self) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Authorization": f"Bearer {self._api_key}",
+        }
+
+    def _http_error_message(self, exc: urllib.error.HTTPError) -> str:
+        """Canonical failure text: keeps the ``HTTP <code>`` marker the router reads."""
+        error_body = ""
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        detail = error_body[:500] if error_body else exc.reason
+        return self._sanitize(f"NVIDIA API HTTP {exc.code}: {detail}")
 
     def _sanitize(self, message: str) -> str:
         """Strip the API key from any error message."""
@@ -199,12 +285,15 @@ class NVIDIAModelProvider(BaseModelProvider):
         model: str,
         messages: list[dict[str, Any]],
         parameters: dict[str, Any],
+        stream: bool = False,
     ) -> dict[str, Any]:
         """Build the JSON body for the NVIDIA API."""
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
+        if stream:
+            body["stream"] = True
 
         # Map supported parameters.
         param_keys = {
@@ -299,17 +388,7 @@ class NVIDIAModelProvider(BaseModelProvider):
                 raw_bytes = resp.read()
         except urllib.error.HTTPError as exc:
             # Read error body for a useful message, but never leak the key.
-            error_body = ""
-            try:
-                error_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
-            raise ModelProviderError(
-                self._sanitize(
-                    f"NVIDIA API HTTP {exc.code}: "
-                    f"{error_body[:500] if error_body else exc.reason}"
-                )
-            ) from exc
+            raise ModelProviderError(self._http_error_message(exc)) from exc
         except urllib.error.URLError as exc:
             raise ModelProviderError(
                 self._sanitize(f"NVIDIA API network error: {exc.reason}")
@@ -329,3 +408,49 @@ class NVIDIAModelProvider(BaseModelProvider):
             raise ModelProviderError(
                 self._sanitize(f"NVIDIA API returned invalid JSON: {exc}")
             ) from exc
+
+    def _default_http_stream(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        timeout: int,
+    ) -> Any:
+        """POST and return an iterator of decoded SSE lines (stdlib only).
+
+        Connection failures raise eagerly, before any delta is emitted, so the
+        router can still apply bounded fallback; failures after the stream has
+        started surface from the iterator and are wrapped by ``stream()``.
+        """
+        encoded_body = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=encoded_body,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            raise ModelProviderError(self._http_error_message(exc)) from exc
+        except urllib.error.URLError as exc:
+            raise ModelProviderError(
+                self._sanitize(f"NVIDIA API network error: {exc.reason}")
+            ) from exc
+        except TimeoutError as exc:
+            raise ModelProviderError(
+                self._sanitize(f"NVIDIA API request timed out after {timeout}s")
+            ) from exc
+        except Exception as exc:
+            raise ModelProviderError(
+                self._sanitize(f"NVIDIA API connection failed: {exc}")
+            ) from exc
+
+        def _lines():
+            with resp:
+                for raw in resp:
+                    yield raw.decode("utf-8", "replace")
+
+        return _lines()

@@ -831,15 +831,89 @@ def test_typing_different_text_is_not_treated_as_a_repeated_step():
     assert _step_signature(first) != _step_signature(second)
 
 
-def _close_test_notepad(hwnd: int) -> None:
-    """Close a Notepad window this test spawned, discarding any unsaved prompt.
+_SAVE_PROMPT_WINDOW_CLASS = "#32770"
 
-    Test-only cleanup: it removes windows the test created so the desktop is left
-    as it was found. Mamba itself exposes no close/discard operation.
+
+def _recorded_identity(target: Any) -> dict[str, Any] | None:
+    """Extract the immutable recorded identity (handle, owning PID, class)."""
+    if isinstance(target, WindowBinding):
+        return {"hwnd": target.hwnd, "pid": target.pid, "class_name": target.class_name}
+    if isinstance(target, dict):
+        hwnd = target.get("hwnd")
+        pid = target.get("target_pid", target.get("pid"))
+        class_name = target.get("target_class", target.get("class_name"))
+        if hwnd is None or pid is None:
+            return None
+        try:
+            return {
+                "hwnd": int(hwnd),
+                "pid": int(pid),
+                "class_name": str(class_name or ""),
+            }
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _live_window_binding(hwnd: int) -> WindowBinding | None:
+    """Read the live window for a handle (single seam, patchable in tests)."""
+    from tools.desktop._win32 import window_of
+
+    return window_of(int(hwnd))
+
+
+def _window_still_test_owned(recorded: dict[str, Any]) -> bool:
+    """Whether the live window still matches the recorded test-owned identity."""
+    live = _live_window_binding(recorded["hwnd"])
+    if live is None:
+        return False
+    if live.pid != recorded["pid"]:
+        return False
+    if recorded["class_name"] and live.class_name != recorded["class_name"]:
+        return False
+    return True
+
+
+def _prompt_belongs_to(
+    recorded: dict[str, Any], *, foreground_hwnd: int | None = None
+) -> bool:
+    """Whether a save prompt is positively this test-owned process's own dialog.
+
+    A discard key may only be sent when the foreground window is a standard
+    dialog (class #32770) owned by the same PID as the recorded window and is
+    not that window itself. Anything else is left untouched.
+    """
+    if foreground_hwnd is None:
+        try:
+            import win32gui
+
+            foreground_hwnd = int(win32gui.GetForegroundWindow() or 0)
+        except Exception:
+            return False
+    if not foreground_hwnd or foreground_hwnd == recorded["hwnd"]:
+        return False
+    live = _live_window_binding(foreground_hwnd)
+    if live is None:
+        return False
+    return live.class_name == _SAVE_PROMPT_WINDOW_CLASS and live.pid == recorded["pid"]
+
+
+def _close_test_notepad(target: Any) -> None:
+    """Close exactly the Notepad window a test created; never any other window.
+
+    Requires the full recorded identity (handle + owning PID + window class)
+    and refuses to act unless the live window still matches it. Ctrl+W is sent
+    only to that revalidated window; the "Save changes?" prompt is answered
+    only when positively identified as this same process's own dialog. In any
+    other situation the window — and any prompt on it — is left exactly as
+    found for the user to decide.
 
     Windows 11 Notepad ignores ``WM_CLOSE`` for documents with unsaved changes;
     the tab must be closed with Ctrl+W and the "Don't save" prompt answered.
     """
+    recorded = _recorded_identity(target)
+    if recorded is None:
+        return
     try:
         import ctypes
 
@@ -848,13 +922,11 @@ def _close_test_notepad(hwnd: int) -> None:
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
-        if not hwnd or not win32gui.IsWindow(hwnd):
-            return
 
-        def _attach() -> list[int]:
+        def _attach(*hwnds: int) -> list[int]:
             current = kernel32.GetCurrentThreadId()
             attached: list[int] = []
-            for h in (win32gui.GetForegroundWindow(), hwnd):
+            for h in hwnds:
                 try:
                     thread_id = win32process.GetWindowThreadProcessId(h)[0]
                 except Exception:
@@ -885,28 +957,117 @@ def _close_test_notepad(hwnd: int) -> None:
                 user32.keybd_event(0x11, 0, 0x0002, 0)
 
         for _ in range(2):
-            if not win32gui.IsWindow(hwnd):
+            if not win32gui.IsWindow(recorded["hwnd"]):
                 return
-            attached = _attach()
+            if not _window_still_test_owned(recorded):
+                return  # the handle no longer names the recorded test window
+            attached = _attach(win32gui.GetForegroundWindow(), recorded["hwnd"])
             try:
-                win32gui.SetForegroundWindow(hwnd)
+                win32gui.SetForegroundWindow(recorded["hwnd"])
                 time.sleep(0.2)
                 _press(0x57, ctrl=True)  # Ctrl+W closes the document tab
             finally:
                 _detach(attached)
             time.sleep(0.4)
-            if win32gui.IsWindow(hwnd):
-                # "Save changes?" prompt: discard.
-                attached = _attach()
-                try:
-                    win32gui.SetForegroundWindow(hwnd)
-                    time.sleep(0.15)
-                    _press(0x4E)  # N
-                finally:
-                    _detach(attached)
-                time.sleep(0.3)
+            if not win32gui.IsWindow(recorded["hwnd"]):
+                return
+            # A "Save changes?" prompt may have appeared. Answer it only when it
+            # is positively this test-owned process's own dialog; otherwise leave
+            # the window exactly as found.
+            if not _prompt_belongs_to(recorded):
+                return
+            attached = _attach(win32gui.GetForegroundWindow(), recorded["hwnd"])
+            try:
+                _press(0x4E)  # N: "Don't save", for the test-typed text only
+            finally:
+                _detach(attached)
+            time.sleep(0.3)
     except Exception:
         pass
+
+
+# ── test cleanup safety: revalidated identity, proven prompt only ──────────
+
+
+def test_cleanup_identity_extraction_requires_handle_and_pid():
+    """F4: cleanup cannot act without a full recorded identity."""
+    binding = WindowBinding(
+        hwnd=2001,
+        title="Untitled - Notepad",
+        class_name="Notepad",
+        pid=777,
+        process_name="Notepad.exe",
+    )
+    assert _recorded_identity(binding) == {"hwnd": 2001, "pid": 777, "class_name": "Notepad"}
+    assert _recorded_identity(
+        {"hwnd": 5, "target_pid": 6, "target_class": "Notepad"}
+    ) == {"hwnd": 5, "pid": 6, "class_name": "Notepad"}
+    assert _recorded_identity({"hwnd": 5}) is None
+    assert _recorded_identity({"target_pid": 6}) is None
+    assert _recorded_identity(None) is None
+
+
+def test_cleanup_identity_requires_full_recorded_match(monkeypatch):
+    """F4: cleanup refuses any window that does not match the recorded identity."""
+    import tools.desktop._win32 as win32_helpers
+
+    recorded = {"hwnd": 2001, "pid": 777, "class_name": "Notepad"}
+
+    def live(hwnd: int, *, pid: int = 777, cls: str = "Notepad") -> WindowBinding:
+        return WindowBinding(
+            hwnd=hwnd,
+            title="Untitled - Notepad",
+            class_name=cls,
+            pid=pid,
+            process_name="Notepad.exe",
+        )
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: live(hwnd))
+    assert _window_still_test_owned(recorded) is True
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: live(hwnd, pid=999))
+    assert _window_still_test_owned(recorded) is False
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: live(hwnd, cls="Notepad++"))
+    assert _window_still_test_owned(recorded) is False
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: None)
+    assert _window_still_test_owned(recorded) is False
+
+
+def test_cleanup_prompt_must_belong_to_recorded_process(monkeypatch):
+    """F4: a discard key may only answer this process's own save prompt."""
+    import tools.desktop._win32 as win32_helpers
+
+    recorded = {"hwnd": 2001, "pid": 777, "class_name": "Notepad"}
+
+    def dialog(hwnd: int, *, pid: int, cls: str = "#32770") -> WindowBinding:
+        return WindowBinding(
+            hwnd=hwnd,
+            title="Notepad",
+            class_name=cls,
+            pid=pid,
+            process_name="Notepad.exe",
+        )
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: dialog(hwnd, pid=777))
+    # The prompt itself — not the target window — must be the foreground dialog.
+    assert _prompt_belongs_to(recorded, foreground_hwnd=2002) is True
+    assert _prompt_belongs_to(recorded, foreground_hwnd=recorded["hwnd"]) is False
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: dialog(hwnd, pid=999))
+    assert _prompt_belongs_to(recorded, foreground_hwnd=2002) is False
+
+    monkeypatch.setattr(
+        win32_helpers,
+        "window_of",
+        lambda hwnd: dialog(hwnd, pid=777, cls="OtherClass"),
+    )
+    assert _prompt_belongs_to(recorded, foreground_hwnd=2002) is False
+
+    monkeypatch.setattr(win32_helpers, "window_of", lambda hwnd: None)
+    assert _prompt_belongs_to(recorded, foreground_hwnd=2002) is False
+    assert _prompt_belongs_to(recorded, foreground_hwnd=0) is False
 
 
 def _wait_for_text(
@@ -1014,7 +1175,7 @@ def test_real_notepad_launch_focus_type_and_read_back():
     found, last_seen = _wait_for_text(handler, binding, "Hello from Mamba")
     assert found, f"typed text never appeared in the bound window (saw {last_seen!r})"
 
-    _close_test_notepad(int(binding["hwnd"]))
+    _close_test_notepad(binding)
 
 
 @pytest.mark.skipif(
@@ -1065,7 +1226,7 @@ def test_real_wrong_target_protection_refuses_unfocused_notepad():
 
     # Nothing was typed into the unrelated window's target document.
     assert marker not in driver.read_text(target)
-    _close_test_notepad(target.hwnd)
+    _close_test_notepad(target)
 
 
 class _FixedPlanRouter:
@@ -1153,7 +1314,16 @@ def test_real_full_stack_user_request_to_verified_notepad_outcome():
     )
     assert found, f"typed text never appeared in the bound window (saw {last_seen!r})"
 
-    _close_test_notepad(observed[0].hwnd)
+    # Clean up using the exact window the typing action recorded as its target —
+    # never a window re-found by title after the fact.
+    typed_obs = next(o for o in result.observations if o.metadata.get("typed"))
+    _close_test_notepad(
+        {
+            "hwnd": typed_obs.metadata["hwnd"],
+            "target_pid": typed_obs.metadata["target_pid"],
+            "target_class": typed_obs.metadata["target_class"],
+        }
+    )
 
 
 @pytest.mark.skipif(
@@ -1233,7 +1403,16 @@ def test_real_voice_request_reaches_same_notepad_execution_path():
         DesktopTaskHandler(), binding, "Hello from Mamba"
     )
     assert found, f"spoken request never produced the text (saw {last_seen!r})"
-    _close_test_notepad(observed[0].hwnd)
+
+    # Clean up using the exact window the typing action recorded as its target.
+    typed_obs = next(o for o in result.observations if o.metadata.get("typed"))
+    _close_test_notepad(
+        {
+            "hwnd": typed_obs.metadata["hwnd"],
+            "target_pid": typed_obs.metadata["target_pid"],
+            "target_class": typed_obs.metadata["target_class"],
+        }
+    )
 
 
 def _silent_wav() -> bytes:
