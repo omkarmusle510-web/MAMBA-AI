@@ -265,28 +265,55 @@ def test_speech_normalization_strips_markdown():
     assert "C:\\Users\\Default\\file.txt" in spoken
 
 
-def test_desktop_actions_execute_without_approval():
-    """Verify window close/focus and clipboard read execute automatically without confirmation."""
+def test_desktop_close_requires_approval_and_resumes():
+    """Verify window close is HIGH/destructive, pauses for approval, and resumes on 'yes'."""
     from tools.desktop.types import DESKTOP_OPERATIONS, DesktopAction
 
     close_meta = DESKTOP_OPERATIONS[DesktopAction.CLOSE_WINDOW].to_metadata()
-    assert close_meta["risk_level"] == RiskLevel.LOW
-    assert close_meta["destructive"] is False
+    # Closing can discard the user's unsaved work: HIGH risk + destructive.
+    assert close_meta["risk_level"] == RiskLevel.HIGH
+    assert close_meta["destructive"] is True
 
     focus_meta = DESKTOP_OPERATIONS[DesktopAction.FOCUS_WINDOW].to_metadata()
     assert focus_meta["risk_level"] == RiskLevel.LOW
     assert focus_meta["destructive"] is False
 
+    # Closing a window pauses for user confirmation through the existing policy.
     handler = RecordingHandler(metadata=close_meta)
     executor = TaskExecutor(handlers={"close_window": handler})
     plan = ExecutionPlan(steps=(
-        PlanStep(description="close notepad", intent="close_window", metadata={"title": "Notepad"}),
+        PlanStep(
+            description="close notepad",
+            intent="close_window",
+            metadata={"hwnd": 4321, "target_pid": 777},
+        ),
     ))
     brain = Brain(planner=StaticPlanner([plan]), executor=executor, permissions=DefaultPermissionPolicy())
 
-    res = brain.run("close Notepad window")
-    assert res.status == ResultStatus.COMPLETED
+    res1 = brain.run("close Notepad window")
+    assert len(handler.executed) == 0  # paused for confirmation, not executed
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in res1.output
+
+    res2 = brain.run("yes")
+    assert res2.status == ResultStatus.COMPLETED
     assert len(handler.executed) == 1
+    assert brain._pending_approval is None
+
+    # Focus remains a LOW-risk action that executes without confirmation.
+    focus_handler = RecordingHandler(metadata=focus_meta)
+    focus_executor = TaskExecutor(handlers={"focus_window": focus_handler})
+    focus_plan = ExecutionPlan(steps=(
+        PlanStep(description="focus notepad", intent="focus_window", metadata={"title": "Notepad"}),
+    ))
+    focus_brain = Brain(
+        planner=StaticPlanner([focus_plan]),
+        executor=focus_executor,
+        permissions=DefaultPermissionPolicy(),
+    )
+    focus_res = focus_brain.run("focus Notepad window")
+    assert focus_res.status == ResultStatus.COMPLETED
+    assert len(focus_handler.executed) == 1
 
 
 def test_destructive_git_in_brain_requires_approval_and_resumes():

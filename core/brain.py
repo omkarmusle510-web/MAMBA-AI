@@ -98,6 +98,27 @@ _CROSS_APP_READ_INTENTS: tuple[str, ...] = (
     "read_notepad_text",
 )
 
+# Close intents act on whatever window an earlier step bound. They are not
+# launch/type/read intents, but they must inherit the exact bound target the
+# same way, so the close cannot drift onto another matching window.
+_CROSS_APP_CLOSE_INTENTS: frozenset[str] = frozenset(
+    {
+        "close_window",
+        "terminate_window",
+        "kill_window",
+        "destroy_window",
+    }
+)
+
+# Acting intents whose target, when an earlier step in the same execution
+# bound one, must be that exact window rather than a fresh resolution by
+# application name (which could silently pick another matching window).
+_CROSS_APP_CARRY_INTENTS: frozenset[str] = (
+    _CROSS_APP_TEXT_INTENTS
+    | frozenset(_CROSS_APP_READ_INTENTS)
+    | _CROSS_APP_CLOSE_INTENTS
+)
+
 _UI_TEXT_PREDICATE_KEY = "ui_text_contains"
 """Expected-predicate that verifies an outcome by observing the target's UI.
 
@@ -1397,6 +1418,15 @@ class Brain:
             context.mark_failed(browser_error)
             return _StepOutcome.FAILED, browser_error
 
+        # ── Carry the exact bound application window (launch → act) ──
+        # When an earlier step in this execution bound a window, a later step
+        # acting on the same application inherits that window's handle and
+        # owning-process identity, so the action cannot drift onto another
+        # matching window. The identity is revalidated immediately before the
+        # action; a stale or replaced target is refused downstream, never
+        # silently rebound.
+        self._carry_cross_app_binding(step, context)
+
         # ── Cross-app target binding (Notepad) ──
         # The action target is bound and validated *before* permission
         # evaluation and before execution: the typed text, the intended
@@ -1812,6 +1842,65 @@ class Brain:
             return ""
 
         return ""
+
+    def _carry_cross_app_binding(self, step: PlanStep, context: ExecutionContext) -> None:
+        """Pin a previously bound application window onto an acting step.
+
+        When one step of this execution bound a window (a launch, or an
+        explicit target), a later step acting on the same application
+        (type/read/close) inherits the exact bound window: its handle, owning
+        process identity, title, class, process, and application. Downstream
+        the window is revalidated against its live state immediately before
+        the action, so a stale or replaced target is refused instead of being
+        silently rebound to another matching window.
+
+        A step that already names a window handle is left untouched, and
+        nothing is ever inferred from the foreground window. When the step
+        names an application, only a binding recorded for that application is
+        carried. This is a no-op when nothing was bound in this execution.
+        """
+        intent = step.intent.strip().lower()
+        if intent not in _CROSS_APP_CARRY_INTENTS:
+            return
+        if step.metadata.get("hwnd") is not None:
+            return
+
+        pinned: set[str] = set()
+        for key in ("app_id", "app"):
+            value = step.metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                pinned.add(value.strip().lower())
+
+        for observation in reversed(context.observations):
+            if not observation.success:
+                continue
+            meta = observation.metadata
+            if meta.get("hwnd") is None or meta.get("target_pid") is None:
+                continue
+            carried_names = {
+                str(meta.get(key) or "").strip().lower()
+                for key in ("app_id", "app")
+            }
+            if pinned and not (pinned & carried_names):
+                continue
+            try:
+                hwnd = int(meta["hwnd"])
+                target_pid = int(meta["target_pid"])
+            except (TypeError, ValueError):
+                continue
+            step.metadata.setdefault("hwnd", hwnd)
+            step.metadata.setdefault("target_pid", target_pid)
+            for key in ("target_title", "target_class", "target_process"):
+                value = meta.get(key)
+                if value is not None:
+                    step.metadata.setdefault(key, value)
+            app_id = str(meta.get("app_id") or "").strip()
+            if app_id:
+                step.metadata.setdefault("app_id", app_id)
+            app_name = str(meta.get("app") or "").strip()
+            if app_name:
+                step.metadata.setdefault("app", app_name)
+            return
 
     # ── application resolution (delegates to the desktop capability) ──
 

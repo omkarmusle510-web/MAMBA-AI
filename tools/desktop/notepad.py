@@ -82,15 +82,27 @@ class NotepadDriver:
 
 
 def read_notepad_text(hwnd: int | None = None) -> str:
-    """Read the text of a bound Notepad window (raises on failure)."""
+    """Read the text of a bound Notepad window (raises on failure).
+
+    An explicit handle must name a live window — a stale handle is refused, not
+    silently replaced. Without a handle, exactly one open Notepad window is
+    read; several open windows are refused rather than guessed at.
+    """
     driver = WindowsNotepadDriver()
-    target = None
     if hwnd is not None:
         candidate = window_of(int(hwnd))
-        target = candidate.identified_as(APP_NOTEPAD) if candidate else None
-    if target is None:
-        windows = driver.find_windows()
-        if not windows:
-            raise TargetResolutionError("No Notepad window is open.")
-        target = windows[0]
-    return driver.read_text(target)
+        if candidate is None:
+            raise TargetResolutionError(
+                f"The specified Notepad window (HWND {hwnd}) is no longer open."
+            )
+        return driver.read_text(candidate.identified_as(APP_NOTEPAD))
+    windows = driver.find_windows()
+    if not windows:
+        raise TargetResolutionError("No Notepad window is open.")
+    if len(windows) > 1:
+        candidates = "; ".join(f"HWND {w.hwnd} '{w.title}'" for w in windows)
+        raise TargetResolutionError(
+            f"There are {len(windows)} open Notepad windows; refusing to choose one. "
+            f"Specify the window handle to read. Candidates: {candidates}"
+        )
+    return driver.read_text(windows[0])

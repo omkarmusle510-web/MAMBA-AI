@@ -1070,6 +1070,141 @@ def test_cleanup_prompt_must_belong_to_recorded_process(monkeypatch):
     assert _prompt_belongs_to(recorded, foreground_hwnd=0) is False
 
 
+# ── ambiguous / stale reads never guess (F2) ────────────────────────────────
+
+
+def test_read_notepad_text_refuses_multiple_open_windows(monkeypatch):
+    """F2: several Notepad windows and no handle -> refuse instead of guessing."""
+    import tools.desktop.notepad as notepad_module
+
+    first = WindowBinding(
+        hwnd=100,
+        title="Untitled - Notepad",
+        class_name="Notepad",
+        pid=777,
+        process_name="Notepad.exe",
+    )
+    second = WindowBinding(
+        hwnd=200,
+        title="notes - Notepad",
+        class_name="Notepad",
+        pid=778,
+        process_name="Notepad.exe",
+    )
+    monkeypatch.setattr(
+        notepad_module.WindowsNotepadDriver, "find_windows", lambda self: [first, second]
+    )
+
+    with pytest.raises(TargetResolutionError) as err:
+        notepad_module.read_notepad_text()
+
+    message = str(err.value)
+    assert "refusing to choose one" in message
+    assert "100" in message and "200" in message
+
+
+def test_read_notepad_text_stale_handle_never_falls_back(monkeypatch):
+    """F2: an explicit handle that is no longer live is refused, not replaced."""
+    import tools.desktop.notepad as notepad_module
+
+    live = WindowBinding(
+        hwnd=300,
+        title="Untitled - Notepad",
+        class_name="Notepad",
+        pid=777,
+        process_name="Notepad.exe",
+    )
+    monkeypatch.setattr(notepad_module, "window_of", lambda hwnd: None)
+    monkeypatch.setattr(
+        notepad_module.WindowsNotepadDriver, "find_windows", lambda self: [live]
+    )
+
+    with pytest.raises(TargetResolutionError) as err:
+        notepad_module.read_notepad_text(12345)
+
+    assert "no longer open" in str(err.value)
+
+
+# ── the launched window's identity survives into the next step (F5) ────────
+
+
+def test_launch_identity_is_carried_into_the_next_step():
+    """F5(d): launch -> type acts on the window this run launched, not another match."""
+    driver = FakeNotepadDriver()
+    driver.windows.append(
+        WindowBinding(
+            hwnd=555,
+            title="user notes - Notepad",
+            class_name="Notepad",
+            pid=31337,
+            process_name="Notepad.exe",
+        )
+    )
+    driver.texts[555] = "user text"
+    brain = _notepad_brain(
+        driver,
+        PlanStep(description="open Notepad", intent="launch_notepad", metadata={}),
+        PlanStep(
+            description="type the memo",
+            intent="type_text",
+            metadata={"app": "notepad", "text": "hello"},
+        ),
+    )
+
+    result = brain.run("Open Notepad and type hello")
+
+    assert result.status == ResultStatus.COMPLETED, result.error or result.output
+    assert driver.type_calls == [(1001, "hello")]
+    assert driver.texts[1001] == "hello"
+    assert driver.texts[555] == "user text"
+    typed = [o for o in result.observations if o.metadata.get("typed")]
+    assert typed and typed[0].metadata["hwnd"] == 1001
+
+
+class _VanishingLaunchDriver(FakeNotepadDriver):
+    """The launched window disappears right after the launch step completes."""
+
+    def wait_for_editor(self, target: WindowBinding, *, timeout: float = 5.0) -> bool:
+        self.windows = [w for w in self.windows if w.hwnd != target.hwnd]
+        return True
+
+
+def test_carried_identity_never_falls_back_to_another_window():
+    """F5: if the launched window is gone, the next step refuses instead of rebinding."""
+    driver = _VanishingLaunchDriver()
+    driver.windows.append(
+        WindowBinding(
+            hwnd=555,
+            title="user notes - Notepad",
+            class_name="Notepad",
+            pid=31337,
+            process_name="Notepad.exe",
+        )
+    )
+    driver.texts[555] = "user text"
+    brain = _notepad_brain(
+        driver,
+        PlanStep(description="open Notepad", intent="launch_notepad", metadata={}),
+        PlanStep(
+            description="type the memo",
+            intent="type_text",
+            metadata={"app": "notepad", "text": "hello"},
+        ),
+    )
+
+    result = brain.run("Open Notepad and type hello")
+
+    assert result.status == ResultStatus.FAILED
+    assert driver.type_calls == []
+    assert driver.texts[555] == "user text"
+    assert any(
+        "refusing to act on an unverified target" in (o.content or "")
+        for o in result.observations
+    ), [o.content for o in result.observations]
+    # The still-open user window was never substituted for the vanished target.
+    assert all(hwnd != 555 for hwnd, _ in driver.type_calls + driver.refused_type_calls)
+
+
 def _wait_for_text(
     handler: Any,
     binding: dict[str, Any],

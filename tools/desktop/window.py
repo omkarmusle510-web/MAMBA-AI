@@ -10,6 +10,7 @@ from tools.protocols import ToolHandler
 from tools.tool import BaseTool
 from tools.types import Tool, ToolInput, ToolOutput
 
+from ._win32 import window_of
 from .errors import WindowError, WindowNotFoundError
 from .types import DESKTOP_OPERATIONS, DesktopAction, WindowInfo
 
@@ -256,7 +257,17 @@ class FocusWindowHandler:
 
 
 class CloseWindowHandler:
-    """Handler for requesting a window to close via WM_CLOSE."""
+    """Handler for requesting a window to close via WM_CLOSE.
+
+    Closing is consequential — it can discard the user's unsaved work — so this
+    handler never guesses a target and never substitutes a re-found or currently
+    focused window. It acts only on the exact window recorded when it was bound:
+    an explicit handle plus the owning process id (and window class / process
+    name when recorded), revalidated against the live window immediately before
+    the close request. Stale, replaced, or ambiguously identified targets are
+    refused. Confirmation for this action comes from the existing permission
+    policy (close_window is HIGH risk); this handler adds no second mechanism.
+    """
 
     def run(self, input: ToolInput) -> ToolOutput:
         if not _is_windows():
@@ -276,41 +287,158 @@ class CloseWindowHandler:
                 metadata={"available": False},
             )
 
-        hwnd_val = input.arguments.get("hwnd")
-        query = str(input.arguments.get("query") or "").strip()
+        arguments = getattr(input, "arguments", None) or {}
+        metadata = getattr(input, "metadata", None) or {}
+        raw: dict[str, Any] = {}
+        if isinstance(metadata, dict):
+            raw.update(metadata)
+        if isinstance(arguments, dict):
+            raw.update(arguments)
 
-        target_hwnd: int | None = None
-        target_title: str = ""
+        hwnd_val = raw.get("hwnd")
+        query = str(raw.get("query") or raw.get("title") or "").strip()
 
-        if hwnd_val is not None:
-            try:
-                target_hwnd = int(hwnd_val)
-                target_title = win32gui.GetWindowText(target_hwnd) or ""
-            except Exception:
-                target_hwnd = None
-
-        if target_hwnd is None and query:
-            candidates: list[tuple[int, str]] = []
-
-            def _find_cb(h: int, _: Any) -> bool:
-                try:
-                    if win32gui.IsWindowVisible(h):
-                        t = win32gui.GetWindowText(h)
-                        if t and query.lower() in t.lower():
-                            candidates.append((h, t))
-                except Exception:
-                    pass
-                return True
-
-            win32gui.EnumWindows(_find_cb, None)
-            if candidates:
-                target_hwnd, target_title = candidates[0]
-
-        if target_hwnd is None:
+        if hwnd_val is None:
+            if query:
+                return ToolOutput(
+                    success=False,
+                    error=(
+                        f"Refusing to close a window by title search ('{query}'): closing "
+                        "must target the exact window handle recorded when the window was "
+                        "bound, so another window with a matching title can never be closed."
+                    ),
+                    metadata={
+                        "target_found": False,
+                        "close_requested": False,
+                        "error": "explicit_handle_required",
+                    },
+                )
             return ToolOutput(
                 success=False,
-                error=f"Target window not found (query: '{query}', hwnd: {hwnd_val}).",
-                metadata={"target_found": False, "close_requested": False},
+                error=(
+                    "No target window handle was specified; refusing to close a window "
+                    "without an explicit, recorded target."
+                ),
+                metadata={
+                    "target_found": False,
+                    "close_requested": False,
+                    "error": "explicit_handle_required",
+                },
+            )
+
+        try:
+            target_hwnd = int(hwnd_val)
+        except (TypeError, ValueError):
+            return ToolOutput(
+                success=False,
+                error=f"Invalid target window handle: {hwnd_val!r}.",
+                metadata={
+                    "target_found": False,
+                    "close_requested": False,
+                    "error": "invalid_handle",
+                },
+            )
+
+        recorded_pid = raw.get("target_pid")
+        if recorded_pid is None:
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Refusing to close window {target_hwnd}: the recorded owning process "
+                    "identity (target_pid) was not carried, so the window cannot be "
+                    "revalidated as the intended target."
+                ),
+                metadata={
+                    "target_found": False,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "error": "recorded_identity_required",
+                },
+            )
+        try:
+            recorded_pid = int(recorded_pid)
+        except (TypeError, ValueError):
+            return ToolOutput(
+                success=False,
+                error=f"Invalid recorded process id for window {target_hwnd}: {recorded_pid!r}.",
+                metadata={
+                    "target_found": False,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "error": "invalid_recorded_identity",
+                },
+            )
+
+        # Revalidate the exact recorded identity against the live window before
+        # acting: a stale handle, a replaced/reused window, or any identity
+        # mismatch stops the close instead of retargeting.
+        live = window_of(target_hwnd)
+        if live is None:
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"The target window (HWND {target_hwnd}) is no longer open; "
+                    "nothing was closed."
+                ),
+                metadata={
+                    "target_found": False,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "error": "target_gone",
+                },
+            )
+
+        if live.pid != recorded_pid:
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Refusing to close window {target_hwnd}: it now belongs to a "
+                    f"different process (recorded PID {recorded_pid}, live PID {live.pid}). "
+                    "The window was replaced or its handle was reused; closing it could "
+                    "close the wrong window."
+                ),
+                metadata={
+                    "target_found": True,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "title": live.title,
+                    "error": "target_replaced",
+                },
+            )
+
+        recorded_class = raw.get("target_class")
+        if recorded_class and str(recorded_class) != live.class_name:
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Refusing to close window {target_hwnd}: its window class changed "
+                    f"(recorded '{recorded_class}', live '{live.class_name}'); the handle "
+                    "no longer names the recorded window."
+                ),
+                metadata={
+                    "target_found": True,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "title": live.title,
+                    "error": "target_replaced",
+                },
+            )
+
+        recorded_process = raw.get("target_process")
+        if recorded_process and live.process_name and str(recorded_process) != live.process_name:
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Refusing to close window {target_hwnd}: its owning process changed "
+                    f"(recorded '{recorded_process}', live '{live.process_name}')."
+                ),
+                metadata={
+                    "target_found": True,
+                    "close_requested": False,
+                    "hwnd": target_hwnd,
+                    "title": live.title,
+                    "error": "target_replaced",
+                },
             )
 
         try:
@@ -320,7 +448,10 @@ class CloseWindowHandler:
             still_open = bool(win32gui.IsWindow(target_hwnd))
 
             status_desc = "still open" if still_open else "closed"
-            msg = f"Close request sent to window '{target_title}' (HWND: {target_hwnd}). Window is currently {status_desc}."
+            msg = (
+                f"Close request sent to the recorded window '{live.title}' "
+                f"(HWND {target_hwnd}, PID {live.pid}). Window is currently {status_desc}."
+            )
 
             return ToolOutput(
                 success=True,
@@ -329,7 +460,7 @@ class CloseWindowHandler:
                     "target_found": True,
                     "close_requested": True,
                     "hwnd": target_hwnd,
-                    "title": target_title,
+                    "title": live.title,
                     "still_open": still_open,
                     "expected": False,
                     "actual": still_open,

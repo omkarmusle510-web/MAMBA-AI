@@ -40,7 +40,11 @@ from tools.desktop.apps import (
     ApplicationRegistry,
     default_application_registry,
 )
-from tools.desktop.driver import BoundApplicationDriver, CrossAppDriver
+from tools.desktop.driver import (
+    ApplicationUnavailableError,
+    BoundApplicationDriver,
+    CrossAppDriver,
+)
 from tools.desktop.observation import (
     OBSERVATION_FAILED,
     OBSERVATION_UNVERIFIED,
@@ -646,6 +650,192 @@ def test_application_registry_is_extensible_without_core_changes():
     result = brain.run("type extensible into Notes")
     assert result.status == ResultStatus.COMPLETED, result.error or result.output
     assert driver.texts[window.hwnd] == "extensible"
+
+
+# ── launch ownership: only windows created by the launch are bound (F1) ────
+
+
+class _FakeProcess:
+    """Minimal subprocess double exposing the pid and poll() used by launch()."""
+
+    def __init__(self, pid: int, *, exits: bool = False) -> None:
+        self.pid = pid
+        self._exits = exits
+
+    def poll(self) -> int | None:
+        return 0 if self._exits else None
+
+
+def _notepad_window(hwnd: int, pid: int, title: str = "Untitled - Notepad") -> WindowBinding:
+    return WindowBinding(
+        hwnd=hwnd, title=title, class_name="Notepad", pid=pid, process_name="Notepad.exe"
+    )
+
+
+def _driver_for_launch(monkeypatch, *, before, after, proc):
+    """A CrossAppDriver whose window discovery and process launch are faked.
+
+    ``before`` is what window enumeration reports until the process is
+    launched; afterwards it reports ``before + after``, mirroring what really
+    happens on the desktop.
+    """
+    state: dict[str, Any] = {"windows": list(before)}
+    popen_calls: list[list[str]] = []
+
+    def fake_enum() -> list[WindowBinding]:
+        return list(state["windows"])
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append(list(command))
+        state["windows"] = list(before) + list(after)
+        return proc
+
+    monkeypatch.setattr("tools.desktop.driver.enumerate_windows", fake_enum)
+    monkeypatch.setattr("tools.desktop.driver.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        CrossAppDriver, "is_available", lambda self, app_id=None: (True, "ok")
+    )
+    monkeypatch.setattr(
+        CrossAppDriver, "wait_until_ready", lambda self, target, timeout=5.0: True
+    )
+    return CrossAppDriver(registry=default_application_registry()), popen_calls
+
+
+def test_launch_aborts_when_window_snapshot_fails(monkeypatch):
+    """F1: without a before-snapshot nothing launches, so a user window cannot be bound."""
+    popen_calls: list[list[str]] = []
+
+    def broken_enum():
+        raise RuntimeError("enumeration failed")
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append(list(command))
+        return _FakeProcess(4242)
+
+    monkeypatch.setattr("tools.desktop.driver.enumerate_windows", broken_enum)
+    monkeypatch.setattr("tools.desktop.driver.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        CrossAppDriver, "is_available", lambda self, app_id=None: (True, "ok")
+    )
+
+    driver = CrossAppDriver(registry=default_application_registry())
+    with pytest.raises(ApplicationUnavailableError) as err:
+        driver.launch("notepad", timeout=1.0)
+
+    assert popen_calls == []
+    assert "snapshot" in str(err.value)
+
+
+def test_launch_binds_only_the_launched_process_window(monkeypatch):
+    """F1: a pre-existing window of the same app is never bound by launch."""
+    user_window = _notepad_window(100, 9001)
+    owned = _notepad_window(200, 4242)
+    stray = _notepad_window(300, 7777)  # a new window not created by this launch
+    proc = _FakeProcess(4242)
+    driver, popen_calls = _driver_for_launch(
+        monkeypatch, before=[user_window], after=[stray, owned], proc=proc
+    )
+
+    chosen = driver.launch("notepad", timeout=1.0)
+
+    assert popen_calls, "the test did not actually launch anything"
+    assert chosen.hwnd == owned.hwnd
+    assert chosen.pid == 4242
+    assert chosen.hwnd != user_window.hwnd
+    assert chosen.hwnd != stray.hwnd
+
+
+def test_launch_refuses_ambiguous_new_windows(monkeypatch):
+    """F1: several new windows with no owned one -> refuse, never guess."""
+    first = _notepad_window(100, 9001)
+    second = _notepad_window(200, 9002)
+    proc = _FakeProcess(4242)  # still running; no window carries its pid
+    driver, _ = _driver_for_launch(
+        monkeypatch, before=[], after=[first, second], proc=proc
+    )
+
+    with pytest.raises(ApplicationUnavailableError) as err:
+        driver.launch("notepad", timeout=0.6)
+
+    assert "refusing to guess" in str(err.value)
+
+
+def test_launch_accepts_single_new_window_when_launcher_exits(monkeypatch):
+    """F1: launcher-handoff case — one new window, launched process exited."""
+    handoff = _notepad_window(400, 5000)
+    proc = _FakeProcess(4242, exits=True)
+    driver, _ = _driver_for_launch(monkeypatch, before=[], after=[handoff], proc=proc)
+
+    chosen = driver.launch("notepad", timeout=1.0)
+
+    assert chosen.hwnd == handoff.hwnd
+
+
+# ── ambiguous window selection: never silently pick one of many (F2) ───────
+
+
+def test_driver_bind_refuses_ambiguous_application_windows(monkeypatch):
+    """F2: two open windows of the same app -> refuse; exactly one -> bind."""
+    first = _notepad_window(100, 9001)
+    second = _notepad_window(200, 9002, title="notes - Notepad")
+    monkeypatch.setattr(CrossAppDriver, "find", lambda self, app_id: [first, second])
+    driver = CrossAppDriver(registry=default_application_registry())
+
+    binding, problem = driver.bind("notepad", timeout=0.3)
+
+    assert binding is None
+    assert "refusing to choose one" in problem
+    assert "100" in problem and "200" in problem  # every candidate is named
+
+    monkeypatch.setattr(CrossAppDriver, "find", lambda self, app_id: [first])
+    binding, problem = driver.bind("notepad", timeout=0.3)
+
+    assert binding is not None and binding.hwnd == first.hwnd
+    assert problem == ""
+
+
+def test_bind_target_refuses_ambiguous_windows_before_acting():
+    """F2: the tool-level binder refuses to pick one of several windows."""
+    from tools.desktop.cross_app_tools import bind_target
+
+    registry = _registry_with_fake_notes()
+    driver = FakeApplicationDriver(registry.all())
+    first = driver.open_window("notes", "Notes", process="Notes.exe", cls="NotesWindow")
+    second = driver.open_window("notes", "notes backup", process="Notes.exe", cls="NotesWindow")
+    adapter = registry.get("notes")
+
+    target, problem = bind_target(driver, adapter, {"app": "notes"})
+
+    assert target is None
+    assert "refusing to choose one" in problem
+    assert str(first.hwnd) in problem and str(second.hwnd) in problem
+
+
+def test_brain_fails_safely_when_application_windows_are_ambiguous(monkeypatch):
+    """F2: end-to-end, two matching windows stop the action instead of guessing."""
+    first = _notepad_window(100, 9001)
+    second = _notepad_window(200, 9002, title="notes - Notepad")
+    monkeypatch.setattr("tools.desktop.driver.enumerate_windows", lambda: [first, second])
+    monkeypatch.setattr(
+        CrossAppDriver, "is_available", lambda self, app_id=None: (True, "ok")
+    )
+
+    driver = CrossAppDriver(registry=default_application_registry())
+    brain = _brain_with(
+        driver,
+        PlanStep(
+            description="type into notepad",
+            intent="type_text",
+            metadata={"app": "notepad", "text": "hello"},
+        ),
+    )
+
+    result = brain.run("type hello into notepad")
+
+    assert result.status == ResultStatus.FAILED
+    assert any(
+        "refusing to choose one" in (o.content or "") for o in result.observations
+    ), [o.content for o in result.observations]
 
 
 # ── opt-in real Windows validation ─────────────────────────────────────────

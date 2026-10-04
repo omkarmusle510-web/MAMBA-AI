@@ -229,7 +229,14 @@ class CrossAppDriver:
         args: tuple[str, ...] = (),
         timeout: float = _DEFAULT_LAUNCH_TIMEOUT,
     ) -> WindowBinding:
-        """Launch an application and bind the window that appears."""
+        """Launch an application and bind the window that appears.
+
+        Ownership is explicit: the before/after window snapshot plus the
+        launched process's own PID identify the window this call created. If
+        the snapshot cannot be taken, nothing is launched (without it, an
+        existing user window could be mistaken for the launched one). A window
+        that existed before the launch is never bound.
+        """
         adapter = self.registry.get(app_id)
         if adapter is None:
             raise ApplicationUnavailableError(f"'{app_id}' is not a supported application.")
@@ -242,10 +249,17 @@ class CrossAppDriver:
         if executable is None:  # pragma: no cover - is_available already checked
             raise ApplicationUnavailableError(f"{adapter.display_name} is not installed.")
 
+        # Snapshot before launching. Without a reliable "before" set, ownership
+        # cannot be established, so abort rather than risk binding a window the
+        # user already had open.
         try:
             before = {w.hwnd for w in self.find(adapter.app_id)}
-        except Exception:
-            before = set()
+        except Exception as exc:
+            raise ApplicationUnavailableError(
+                f"Refusing to launch {adapter.display_name}: the current windows could not "
+                f"be recorded before launch ({exc}); without that snapshot the launched "
+                "window could not be told apart from an existing one."
+            ) from exc
 
         creation_flags = 0
         if hasattr(subprocess, "DETACHED_PROCESS"):
@@ -253,7 +267,7 @@ class CrossAppDriver:
         if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
             creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            subprocess.Popen(  # noqa: S603 - declared adapter executable path
+            proc = subprocess.Popen(  # noqa: S603 - declared adapter executable path
                 [str(executable), *args],
                 creationflags=creation_flags,
                 close_fds=True,
@@ -265,23 +279,38 @@ class CrossAppDriver:
 
         deadline = time.monotonic() + max(0.5, timeout)
         newest: list[WindowBinding] = []
+        owned: list[WindowBinding] = []
         while time.monotonic() < deadline:
             try:
                 newest = [w for w in self.find(adapter.app_id) if w.hwnd not in before]
             except Exception:
                 newest = []
-            if newest:
+            owned = [w for w in newest if w.pid == proc.pid]
+            if owned:
+                break
+            # Handoff pattern (a launcher that exits after starting the real
+            # app): accept a single new window only when the launched process
+            # has exited and exactly one new window exists. A window that
+            # existed before the launch is never eligible.
+            if len(newest) == 1 and proc.poll() is not None:
+                owned = newest
                 break
             time.sleep(0.15)
 
-        if not newest:
+        if not owned:
+            if newest:
+                raise ApplicationUnavailableError(
+                    f"{adapter.display_name} was started but {len(newest)} new "
+                    f"{adapter.display_name} window(s) appeared and none could be confirmed "
+                    "as the one this launch created; refusing to guess which window to bind."
+                )
             raise ApplicationUnavailableError(
                 f"{adapter.display_name} was started but no {adapter.display_name} "
                 f"window identified itself within {timeout:.0f}s."
             )
 
-        chosen = newest[0]
-        for binding in newest:
+        chosen = owned[0]
+        for binding in owned:
             if binding.title.lower().startswith("untitled"):
                 chosen = binding
                 break
@@ -368,8 +397,17 @@ class CrossAppDriver:
             deadline = time.monotonic() + max(0.2, timeout)
             while True:
                 windows = self.find(requested.app_id)
-                if windows:
+                if len(windows) == 1:
                     return windows[0], ""
+                if len(windows) > 1:
+                    candidates = "; ".join(
+                        f"HWND {w.hwnd} '{w.title}' (PID {w.pid})" for w in windows
+                    )
+                    return None, (
+                        f"There are {len(windows)} open {requested.display_name} windows; "
+                        "refusing to choose one. Specify the exact window handle to use. "
+                        f"Candidates: {candidates}"
+                    )
                 if time.monotonic() >= deadline:
                     return None, (
                         f"No open {requested.display_name} window was found. Launch it "

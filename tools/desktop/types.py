@@ -99,9 +99,18 @@ DESKTOP_OPERATIONS: dict[DesktopAction, DesktopOperationDefinition] = {
     ),
     DesktopAction.CLOSE_WINDOW: DesktopOperationDefinition(
         name=DesktopAction.CLOSE_WINDOW.value,
-        description="Send WM_CLOSE to request closing a target window.",
-        risk_level=RiskLevel.LOW,
-        destructive=False,
+        description=(
+            "Request closing the exact window recorded when it was bound (handle "
+            "plus owning process identity, revalidated immediately before acting). "
+            "Refuses stale, replaced, or ambiguously identified targets instead of "
+            "guessing, because closing can discard unsaved work."
+        ),
+        # HIGH + destructive: closing a window can discard the user's unsaved
+        # work. The existing permission policy maps HIGH -> ASK, so the action
+        # now requires the user's confirmation through the single existing
+        # mechanism; nothing is auto-authorized.
+        risk_level=RiskLevel.HIGH,
+        destructive=True,
         user_sensitive=False,
     ),
     DesktopAction.READ_CLIPBOARD: DesktopOperationDefinition(

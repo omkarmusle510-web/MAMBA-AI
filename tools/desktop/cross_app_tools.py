@@ -164,7 +164,9 @@ def bind_target(
 
     An explicit handle is honoured only if it verifies as the requested
     application; a carried binding is re-verified; otherwise the application's
-    own open window is used. Nothing is inferred from the foreground window.
+    single open window is used. An ambiguous set of windows (two or more) is
+    refused rather than guessed at. Nothing is inferred from the foreground
+    window.
     """
     hwnd = meta.get("hwnd")
     if hwnd is not None:
@@ -199,8 +201,17 @@ def bind_target(
         )
 
     windows = _socket_windows(driver, adapter)
-    if windows:
+    if len(windows) == 1:
         return windows[0].identified_as(adapter.app_id), ""
+    if len(windows) > 1:
+        candidates = "; ".join(
+            f"HWND {w.hwnd} '{w.title}' (PID {w.pid})" for w in windows
+        )
+        return None, (
+            f"There are {len(windows)} open {adapter.display_name} windows and no exact "
+            "target was specified; refusing to choose one. Specify the exact window "
+            f"handle to use. Candidates: {candidates}"
+        )
     return None, (
         f"No open {adapter.display_name} window was found. Launch it first, or repeat "
         "the request after it is open."
