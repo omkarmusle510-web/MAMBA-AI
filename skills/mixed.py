@@ -53,6 +53,7 @@ _FILESYSTEM_INTENTS = frozenset(
         "list_dir",
         "read_file",
         "write_file",
+        "create_file",
         "create_directory",
         "create_dir",
         "mkdir",

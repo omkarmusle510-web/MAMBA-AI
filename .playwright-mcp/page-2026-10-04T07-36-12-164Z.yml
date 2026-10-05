@@ -1,0 +1,621 @@
+- generic [ref=e26]:
+  - banner [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - button "Guide" [active] [ref=e9] [cursor=pointer]
+        - generic [ref=e11]:
+          - link "YouTube Home" [ref=e27] [cursor=pointer]:
+            - /url: /
+          - generic [ref=e31]: IN
+        - button "Skip navigation" [ref=e35] [cursor=pointer]
+      - generic [ref=e12]:
+        - search [ref=e13]:
+          - generic [ref=e15]:
+            - generic [ref=e16]:
+              - combobox "Search" [expanded] [ref=e39]: funny cats
+              - button "Clear search query" [ref=e84] [cursor=pointer]
+            - button "Search" [ref=e19] [cursor=pointer]
+        - generic [ref=e41]:
+          - button "Search with your voice" [ref=e43] [cursor=pointer]
+          - tooltip "tooltip"
+      - generic [ref=e47]:
+        - button "Settings" [ref=e52] [cursor=pointer]
+        - link "Sign in" [ref=e56] [cursor=pointer]:
+          - /url: https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Den%26next%3D%252Fresults%253Fsearch_query%253Dfunny%252Bcats&hl=en&ec=65620
+  - navigation [ref=e60]:
+    - generic [ref=e93]:
+      - link "Home" [ref=e95] [cursor=pointer]:
+        - /url: /
+      - link "Shorts" [ref=e101] [cursor=pointer]:
+        - /url: /shorts/
+      - link "Subscriptions" [ref=e105] [cursor=pointer]:
+        - /url: /feed/subscriptions
+      - link "You" [ref=e109] [cursor=pointer]:
+        - /url: /feed/you
+  - generic [ref=e61]:
+    - text: •
+    - main [ref=e207]:
+      - generic [ref=e208]:
+        - generic [ref=e210]:
+          - tablist [ref=e215]:
+            - tab "All" [selected] [ref=e218] [cursor=pointer]
+            - tab "Unwatched" [ref=e223] [cursor=pointer]
+            - tab "Videos" [ref=e228] [cursor=pointer]
+            - tab "Recently uploaded" [ref=e233] [cursor=pointer]
+            - tab "Live" [ref=e238] [cursor=pointer]
+          - generic [ref=e242]:
+            - button "Search filters" [ref=e244] [cursor=pointer]:
+              - generic: Filters
+            - tooltip "tooltip"
+        - generic [ref=e253]:
+          - generic [ref=e254]:
+            - heading "Goofy Cats Compilation✨" [level=2] [ref=e262]
+            - generic [ref=e264]:
+              - generic [ref=e267]:
+                - link [aria-hidden] [ref=e268] [cursor=pointer]:
+                  - /url: /shorts/Z5Cpwn60ySI
+                - generic [ref=e272] [cursor=pointer]:
+                  - generic [ref=e273]:
+                    - heading [level=3] [ref=e274]:
+                      - 'link "Funny Cat Videos 😂 #funny #cat #funnycats" [ref=e275]':
+                        - /url: /shorts/Z5Cpwn60ySI
+                    - generic [ref=e276]: 60M views
+                  - button "More actions" [ref=e278]
+              - generic [ref=e284]:
+                - link [aria-hidden] [ref=e285] [cursor=pointer]:
+                  - /url: /shorts/ih7q2SE5M18
+                - generic [ref=e289] [cursor=pointer]:
+                  - generic [ref=e290]:
+                    - heading [level=3] [ref=e291]:
+                      - link "Ranking The Funniest Cat Water Moments" [ref=e292]:
+                        - /url: /shorts/ih7q2SE5M18
+                    - generic [ref=e293]: 31M views
+                  - button "More actions" [ref=e295]
+              - generic [ref=e301]:
+                - link [aria-hidden] [ref=e302] [cursor=pointer]:
+                  - /url: /shorts/UkgjD7TQoj4
+                - generic [ref=e306] [cursor=pointer]:
+                  - generic [ref=e307]:
+                    - heading [level=3] [ref=e308]:
+                      - 'link "Funny cats #cat #funny #cats #reels #pets #catvideos #funnycats #kitten" [ref=e309]':
+                        - /url: /shorts/UkgjD7TQoj4
+                    - generic [ref=e310]: 37M views
+                  - button "More actions" [ref=e312]
+              - generic [ref=e318]:
+                - link [aria-hidden] [ref=e319] [cursor=pointer]:
+                  - /url: /shorts/7rjJT7NWge0
+                  - img [ref=e324]:
+                    - generic [aria-hidden] [ref=e325]: New
+                - generic [ref=e326] [cursor=pointer]:
+                  - generic [ref=e327]:
+                    - heading [level=3] [ref=e328]:
+                      - 'link "Top 5 Funny Cats (Wait for #1!) Part 13 🐱 #Shorts" [ref=e329]':
+                        - /url: /shorts/7rjJT7NWge0
+                    - generic [ref=e330]: 9.5K views
+                  - button "More actions" [ref=e332]
+              - generic [ref=e338]:
+                - link [aria-hidden] [ref=e339] [cursor=pointer]:
+                  - /url: /shorts/4z8Hi_uQOkE
+                - generic [ref=e343] [cursor=pointer]:
+                  - generic [ref=e344]:
+                    - heading [level=3] [ref=e345]:
+                      - 'link "Ranking Funny Cat Moment #shorts #funnycatsvideo #memes" [ref=e346]':
+                        - /url: /shorts/4z8Hi_uQOkE
+                    - generic [ref=e347]: 309M views
+                  - button "More actions" [ref=e349]
+          - generic [ref=e354]:
+            - link [aria-hidden] [ref=e356] [cursor=pointer]:
+              - /url: /watch?v=mlquvEt2KnA&pp=ygUKZnVubnkgY2F0cw%3D%3D
+              - img [ref=e361]:
+                - generic [aria-hidden] [ref=e362]: 31:13
+              - generic: Now playing
+            - generic [ref=e363] [cursor=pointer]:
+              - generic [ref=e364]:
+                - heading [level=3] [ref=e366]:
+                  - link "The Hilarious Cats Video of 2026 Was Definitely Worth the Wait!🤣 31 minutes" [ref=e367]:
+                    - /url: /watch?v=mlquvEt2KnA&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: The Hilarious Cats Video of 2026 Was Definitely Worth the Wait!🤣
+                - generic [ref=e370]:
+                  - generic [ref=e371]: 27K
+                  - generic [ref=e372]: •14h ago
+              - generic [ref=e373]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e374]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e376]:
+                  - link "Funny And Cute Cat's Life" [ref=e380]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e385]
+              - generic [ref=e387]:
+                - generic [ref=e388]: The Hilarious Cats Video of 2026 Was Definitely Worth the Wait! Extreme cat drama and comedy overload ahead! Watch what ...
+                - tooltip "tooltip"
+              - img "New" [ref=e393]:
+                - generic [aria-hidden] [ref=e394]: New
+          - generic [ref=e396]:
+            - link [aria-hidden] [ref=e398] [cursor=pointer]:
+              - /url: /watch?v=sppNnsF0gUk&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e400] [cursor=pointer]:
+              - generic [ref=e401]:
+                - heading [level=3] [ref=e403]:
+                  - link "You Can’t Stop Laughing At These Cats 😂 TOP Funny Cats Video 2025 29 minutes" [ref=e404]:
+                    - /url: /watch?v=sppNnsF0gUk&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: You Can’t Stop Laughing At These Cats 😂 TOP Funny Cats Video 2025
+                - generic [ref=e407]:
+                  - generic [ref=e408]: 3.4M
+                  - generic [ref=e409]: •9mo ago
+              - generic [ref=e410]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e411]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e413]:
+                  - link "Funny And Cute Cat's Life" [ref=e417]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e422]
+              - generic [ref=e424]:
+                - generic [ref=e425]: You Can't Stop Laughing At These Cats TOP Funny Cats Video 2025 The Funniest Cats of 2025 Are Here! Prepare yourself for ...
+                - tooltip "tooltip"
+          - generic [ref=e434] [cursor=pointer]:
+            - link [aria-hidden] [ref=e435]:
+              - /url: https://www.googleadservices.com/pagead/aclk?sa=L&ai=CUYID6gHCauzfCeK_rtoPisqGgQiV272qiQGu79eF1BSwkB8QASAAYOWCgIC8DoIBF2NhLXB1Yi02MjE5ODExNzQ3MDQ5MzcxoAGL4oqgAagDBMgDCqoEtwJP0F-GJX3HmXbpScqG_Qel7AIRhhqjDZna4pABUfVpkwJ5W5IE-PYT4c8kMtpDN3WB5GBsNjMBWtCrvOVzydwNH-Q2PcR8RXrZRnMOFE7Dn5Z0RMzYtbfSMxVJU92UNqrBH4jFmtOzd2U2_f87-TtUBdfsdCSzYeV9PwEReAOUcpQFkLDtqEIaC6H8nh6AqkESswGwmfDiT6M6FQKA9rqfqT7iVHjbPxRGd0MQdAmCGKFDVGdJS6Fw8RUS0BPWZD1W-xgHOGXpU4XPxKWuZ_77qyu-Aps1QLvjXsP6feyyQGTOKUxIh71Uo-2dqfly8lxkCtlCLhk9lDcYhd3-7WRX51S43SV1-ZMEuFXF5Od25f4SE3NXN5KlGbA7fdISH83vf1OMD2m8CzRGDt4WA4GiNkVDttbSSogFqLnnzFWSBQgIE3iLgPDgAqAGoQGAB92d9d8CkAcEqAfywLECqAe4xLECqAfhtrECqAelz7ECqAfnnbECqAfonbECqAf507ECqAfJ2rECqAep4LECqAem1LECqAeo0huoB7HcG6gHsJuxAqgHrrGxAqgH_bKxAqgHyM-xAqgHyc-xAqgHzcexAqgH8dGxAqgH_NWxAqgH-9WxAqgHjNaxAqgHi9axAqgHmuKxAqgHm-KxAqgHndexAqgHvOqxAqgHndSxAqgHgcYbqAf8r7ECqAfVzhuoB77ZsQKoB6vFG6gHnNwbqAe3obECqAfVqbECqAfn2rECqAfetbECkggLVzJHLUc5QnJFYmOoCAHSCC4IgEEQARheMgKCAjoPgEKAwICAgICAgAKqgIAYSNmg0jVQFFioyNyN7Z-XA2ABmgkraHR0cHM6Ly93d3cuYWRvYmUuY29tL2luL2NyZWF0aXZlY2xvdWQuaHRtbLEJYSyiihkOozrICRfICY8ByAnCAcgJlwK6Cz0IAxAFGAQgBygBMBxAAUgAWH1gAGgAcAGIAQCYAQGiAQgKAKgCAdgCAqgBAdgBA4ACAYgCBboDBXZpc2lu0AsS4AsBogwZahIKEGNvbS5hZG9iZS5yZWFkZXJ4AIgBANIMAhABmg0BEqoNAklOyA0B0g2rBGh0dHBzOi8vYWQuZG91YmxlY2xpY2submV0L2RkbS90cmFja2Nsay9OOTcyOTUyLjI3OTM4MkJJRE1BTkFHRVJfREZBU0lURS9CMjYxMjYyMDAuMzE3MTM5NDU5O2RjX3Rya19haWQ9NTA5OTYyODczO2RjX3Rya19jaWQ9MTU5OTQzMzE3O2RjX2RibV90b2tlbj1BT2plTE5FQUFBQTdDalFLREFnQUZRQUFBQUFkQUFBQUFCSU1DQUFWQUFBQUFCMEFBQUFBSWhRSXFMbm56RldvQW91QThPQUNzQUxFbXVQbUEwQTdFSmZudWdHRWU5Tmk1TUc0WWZhdlJFZVRob3J5O2RjX2xhdD07ZGNfcmRpZD07dGFnX2Zvcl9jaGlsZF9kaXJlY3RlZF90cmVhdG1lbnQ9O3RmdWE9O2x0ZD07ZGNfdGR2PTE7ZGNfdHJhbnNwYXJlbnQ9MTtkY19ydWk9MTtkY19lcHM9QUhhczhjQXlXeV8tbGNka05GLVdHN043QWhsNTk1Q2ROWlVtbXVVU2RpdmtoQktoUy15TnZWb2N6MENHYkxhUThnZ2tneXp1bzdiZnlfLTFuc2JwVEE7ZGNfcHViaWQ9Nj9odHRwczovL3d3dy5hZG9iZS5jb20vaW4vY3JlYXRpdmVjbG91ZC5odG1sP3NkaWQ9OEROODU3TFkmbXY9c29jaWFsJm12Mj1wYWlkc29jJmdhZF9zb3VyY2U9MrATgtOeJbgT____________AbAUA8AVgYCAQNAVAdgVAZgWAagWAeIWAggBgBcBihcYCAMYASABKAEwATgBQAFIAVABWAFgAmgBoBcBqRdXv8ICGj4Y8LoXBigAMAA4AdAYAfAYAQ&gclid=EAIaIQobChMI7Pzcje2flwMV4p9LBR0KpSGAEAEYASAAEgKLtPD_BwE&num=1&cid=CAASqgHkaMZvmjm-xu-FeGOQGfrv1FRtR2k89OB4bSjlQanjXAgqH85k1TUv5tLay--PE0a5oFm_GZ-9tExDHu0fP7qvDCdFYQ6bj-eg_2-p_QyMsH0vQpDhp_7HAymCno8sqLFj02pNMetNRe-gVlIAUx9zX2ZGaOgOqVpHTJYLp5ykkKXjogIVVu2ugKYGGS-YVkDqoTXMy90c6DpP-58efWkCP69WKOqB7FcfVA&ad_cpn=%5BCPN%5D&sig=AOD64_1Txx7ht9kMfvDR5GpGT-e2trM17Q&ctype=110&video_id=W2G-G9BrEbc&label=video_click_to_advertiser_site&ms=%5BCLICK_MS%5D&nb=21&nx=%5BNX%5D&ny=%5BNY%5D&dim=%5BDIM%5D
+              - button [aria-hidden] [ref=e441]
+            - generic [ref=e445]:
+              - generic [ref=e446]:
+                - generic [ref=e447]:
+                  - link "Smooth-sailing through 20+ apps with Creative Cloud Pro." [ref=e450]:
+                    - /url: https://www.googleadservices.com/pagead/aclk?sa=L&ai=CUYID6gHCauzfCeK_rtoPisqGgQiV272qiQGu79eF1BSwkB8QASAAYOWCgIC8DoIBF2NhLXB1Yi02MjE5ODExNzQ3MDQ5MzcxoAGL4oqgAagDBMgDCqoEtwJP0F-GJX3HmXbpScqG_Qel7AIRhhqjDZna4pABUfVpkwJ5W5IE-PYT4c8kMtpDN3WB5GBsNjMBWtCrvOVzydwNH-Q2PcR8RXrZRnMOFE7Dn5Z0RMzYtbfSMxVJU92UNqrBH4jFmtOzd2U2_f87-TtUBdfsdCSzYeV9PwEReAOUcpQFkLDtqEIaC6H8nh6AqkESswGwmfDiT6M6FQKA9rqfqT7iVHjbPxRGd0MQdAmCGKFDVGdJS6Fw8RUS0BPWZD1W-xgHOGXpU4XPxKWuZ_77qyu-Aps1QLvjXsP6feyyQGTOKUxIh71Uo-2dqfly8lxkCtlCLhk9lDcYhd3-7WRX51S43SV1-ZMEuFXF5Od25f4SE3NXN5KlGbA7fdISH83vf1OMD2m8CzRGDt4WA4GiNkVDttbSSogFqLnnzFWSBQgIE3iLgPDgAqAGoQGAB92d9d8CkAcEqAfywLECqAe4xLECqAfhtrECqAelz7ECqAfnnbECqAfonbECqAf507ECqAfJ2rECqAep4LECqAem1LECqAeo0huoB7HcG6gHsJuxAqgHrrGxAqgH_bKxAqgHyM-xAqgHyc-xAqgHzcexAqgH8dGxAqgH_NWxAqgH-9WxAqgHjNaxAqgHi9axAqgHmuKxAqgHm-KxAqgHndexAqgHvOqxAqgHndSxAqgHgcYbqAf8r7ECqAfVzhuoB77ZsQKoB6vFG6gHnNwbqAe3obECqAfVqbECqAfn2rECqAfetbECkggLVzJHLUc5QnJFYmOoCAHSCC4IgEEQARheMgKCAjoPgEKAwICAgICAgAKqgIAYSNmg0jVQFFioyNyN7Z-XA2ABmgkraHR0cHM6Ly93d3cuYWRvYmUuY29tL2luL2NyZWF0aXZlY2xvdWQuaHRtbLEJYSyiihkOozrICRfICY8ByAnCAcgJlwK6Cz0IAxAFGAQgBygBMBxAAUgAWH1gAGgAcAGIAQCYAQGiAQgKAKgCAdgCAqgBAdgBA4ACAYgCBboDBXZpc2lu0AsS4AsBogwZahIKEGNvbS5hZG9iZS5yZWFkZXJ4AIgBANIMAhABmg0BEqoNAklOyA0B0g2rBGh0dHBzOi8vYWQuZG91YmxlY2xpY2submV0L2RkbS90cmFja2Nsay9OOTcyOTUyLjI3OTM4MkJJRE1BTkFHRVJfREZBU0lURS9CMjYxMjYyMDAuMzE3MTM5NDU5O2RjX3Rya19haWQ9NTA5OTYyODczO2RjX3Rya19jaWQ9MTU5OTQzMzE3O2RjX2RibV90b2tlbj1BT2plTE5FQUFBQTdDalFLREFnQUZRQUFBQUFkQUFBQUFCSU1DQUFWQUFBQUFCMEFBQUFBSWhRSXFMbm56RldvQW91QThPQUNzQUxFbXVQbUEwQTdFSmZudWdHRWU5Tmk1TUc0WWZhdlJFZVRob3J5O2RjX2xhdD07ZGNfcmRpZD07dGFnX2Zvcl9jaGlsZF9kaXJlY3RlZF90cmVhdG1lbnQ9O3RmdWE9O2x0ZD07ZGNfdGR2PTE7ZGNfdHJhbnNwYXJlbnQ9MTtkY19ydWk9MTtkY19lcHM9QUhhczhjQXlXeV8tbGNka05GLVdHN043QWhsNTk1Q2ROWlVtbXVVU2RpdmtoQktoUy15TnZWb2N6MENHYkxhUThnZ2tneXp1bzdiZnlfLTFuc2JwVEE7ZGNfcHViaWQ9Nj9odHRwczovL3d3dy5hZG9iZS5jb20vaW4vY3JlYXRpdmVjbG91ZC5odG1sP3NkaWQ9OEROODU3TFkmbXY9c29jaWFsJm12Mj1wYWlkc29jJmdhZF9zb3VyY2U9MrATgtOeJbgT____________AbAUA8AVgYCAQNAVAdgVAZgWAagWAeIWAggBgBcBihcYCAMYASABKAEwATgBQAFIAVABWAFgAmgBoBcBqRdXv8ICGj4Y8LoXBigAMAA4AdAYAfAYAQ&gclid=EAIaIQobChMI7Pzcje2flwMV4p9LBR0KpSGAEAEYASAAEgKLtPD_BwE&num=1&cid=CAASqgHkaMZvmjm-xu-FeGOQGfrv1FRtR2k89OB4bSjlQanjXAgqH85k1TUv5tLay--PE0a5oFm_GZ-9tExDHu0fP7qvDCdFYQ6bj-eg_2-p_QyMsH0vQpDhp_7HAymCno8sqLFj02pNMetNRe-gVlIAUx9zX2ZGaOgOqVpHTJYLp5ykkKXjogIVVu2ugKYGGS-YVkDqoTXMy90c6DpP-58efWkCP69WKOqB7FcfVA&ad_cpn=%5BCPN%5D&sig=AOD64_1Txx7ht9kMfvDR5GpGT-e2trM17Q&ctype=110&video_id=W2G-G9BrEbc&label=video_click_to_advertiser_site&ms=%5BCLICK_MS%5D&nb=0&nx=%5BNX%5D&ny=%5BNY%5D&dim=%5BDIM%5D
+                  - link "Nisha works seamlessly between Photoshop and Illustrator on her branding projects." [ref=e453]:
+                    - /url: https://www.googleadservices.com/pagead/aclk?sa=L&ai=CUYID6gHCauzfCeK_rtoPisqGgQiV272qiQGu79eF1BSwkB8QASAAYOWCgIC8DoIBF2NhLXB1Yi02MjE5ODExNzQ3MDQ5MzcxoAGL4oqgAagDBMgDCqoEtwJP0F-GJX3HmXbpScqG_Qel7AIRhhqjDZna4pABUfVpkwJ5W5IE-PYT4c8kMtpDN3WB5GBsNjMBWtCrvOVzydwNH-Q2PcR8RXrZRnMOFE7Dn5Z0RMzYtbfSMxVJU92UNqrBH4jFmtOzd2U2_f87-TtUBdfsdCSzYeV9PwEReAOUcpQFkLDtqEIaC6H8nh6AqkESswGwmfDiT6M6FQKA9rqfqT7iVHjbPxRGd0MQdAmCGKFDVGdJS6Fw8RUS0BPWZD1W-xgHOGXpU4XPxKWuZ_77qyu-Aps1QLvjXsP6feyyQGTOKUxIh71Uo-2dqfly8lxkCtlCLhk9lDcYhd3-7WRX51S43SV1-ZMEuFXF5Od25f4SE3NXN5KlGbA7fdISH83vf1OMD2m8CzRGDt4WA4GiNkVDttbSSogFqLnnzFWSBQgIE3iLgPDgAqAGoQGAB92d9d8CkAcEqAfywLECqAe4xLECqAfhtrECqAelz7ECqAfnnbECqAfonbECqAf507ECqAfJ2rECqAep4LECqAem1LECqAeo0huoB7HcG6gHsJuxAqgHrrGxAqgH_bKxAqgHyM-xAqgHyc-xAqgHzcexAqgH8dGxAqgH_NWxAqgH-9WxAqgHjNaxAqgHi9axAqgHmuKxAqgHm-KxAqgHndexAqgHvOqxAqgHndSxAqgHgcYbqAf8r7ECqAfVzhuoB77ZsQKoB6vFG6gHnNwbqAe3obECqAfVqbECqAfn2rECqAfetbECkggLVzJHLUc5QnJFYmOoCAHSCC4IgEEQARheMgKCAjoPgEKAwICAgICAgAKqgIAYSNmg0jVQFFioyNyN7Z-XA2ABmgkraHR0cHM6Ly93d3cuYWRvYmUuY29tL2luL2NyZWF0aXZlY2xvdWQuaHRtbLEJYSyiihkOozrICRfICY8ByAnCAcgJlwK6Cz0IAxAFGAQgBygBMBxAAUgAWH1gAGgAcAGIAQCYAQGiAQgKAKgCAdgCAqgBAdgBA4ACAYgCBboDBXZpc2lu0AsS4AsBogwZahIKEGNvbS5hZG9iZS5yZWFkZXJ4AIgBANIMAhABmg0BEqoNAklOyA0B0g2rBGh0dHBzOi8vYWQuZG91YmxlY2xpY2submV0L2RkbS90cmFja2Nsay9OOTcyOTUyLjI3OTM4MkJJRE1BTkFHRVJfREZBU0lURS9CMjYxMjYyMDAuMzE3MTM5NDU5O2RjX3Rya19haWQ9NTA5OTYyODczO2RjX3Rya19jaWQ9MTU5OTQzMzE3O2RjX2RibV90b2tlbj1BT2plTE5FQUFBQTdDalFLREFnQUZRQUFBQUFkQUFBQUFCSU1DQUFWQUFBQUFCMEFBQUFBSWhRSXFMbm56RldvQW91QThPQUNzQUxFbXVQbUEwQTdFSmZudWdHRWU5Tmk1TUc0WWZhdlJFZVRob3J5O2RjX2xhdD07ZGNfcmRpZD07dGFnX2Zvcl9jaGlsZF9kaXJlY3RlZF90cmVhdG1lbnQ9O3RmdWE9O2x0ZD07ZGNfdGR2PTE7ZGNfdHJhbnNwYXJlbnQ9MTtkY19ydWk9MTtkY19lcHM9QUhhczhjQXlXeV8tbGNka05GLVdHN043QWhsNTk1Q2ROWlVtbXVVU2RpdmtoQktoUy15TnZWb2N6MENHYkxhUThnZ2tneXp1bzdiZnlfLTFuc2JwVEE7ZGNfcHViaWQ9Nj9odHRwczovL3d3dy5hZG9iZS5jb20vaW4vY3JlYXRpdmVjbG91ZC5odG1sP3NkaWQ9OEROODU3TFkmbXY9c29jaWFsJm12Mj1wYWlkc29jJmdhZF9zb3VyY2U9MrATgtOeJbgT____________AbAUA8AVgYCAQNAVAdgVAZgWAagWAeIWAggBgBcBihcYCAMYASABKAEwATgBQAFIAVABWAFgAmgBoBcBqRdXv8ICGj4Y8LoXBigAMAA4AdAYAfAYAQ&gclid=EAIaIQobChMI7Pzcje2flwMV4p9LBR0KpSGAEAEYASAAEgKLtPD_BwE&num=1&cid=CAASqgHkaMZvmjm-xu-FeGOQGfrv1FRtR2k89OB4bSjlQanjXAgqH85k1TUv5tLay--PE0a5oFm_GZ-9tExDHu0fP7qvDCdFYQ6bj-eg_2-p_QyMsH0vQpDhp_7HAymCno8sqLFj02pNMetNRe-gVlIAUx9zX2ZGaOgOqVpHTJYLp5ykkKXjogIVVu2ugKYGGS-YVkDqoTXMy90c6DpP-58efWkCP69WKOqB7FcfVA&ad_cpn=%5BCPN%5D&sig=AOD64_1Txx7ht9kMfvDR5GpGT-e2trM17Q&ctype=110&video_id=W2G-G9BrEbc&label=video_click_to_advertiser_site&ms=%5BCLICK_MS%5D&nb=7&nx=%5BNX%5D&ny=%5BNY%5D&dim=%5BDIM%5D
+                  - generic [ref=e454]:
+                    - button "Adobe Creative Cloud Media" [ref=e458]
+                    - generic [ref=e462]:
+                      - generic [ref=e463]: Sponsored
+                      - text: ·
+                    - generic [ref=e464]: Adobe Creative Cloud Pro
+                - button "My Ad Center" [ref=e468]
+              - generic [ref=e474]:
+                - link "Watch" [ref=e477]:
+                  - /url: /watch?v=W2G-G9BrEbc
+                - link "Learn more" [ref=e483]:
+                  - /url: https://www.googleadservices.com/pagead/aclk?sa=L&ai=CUYID6gHCauzfCeK_rtoPisqGgQiV272qiQGu79eF1BSwkB8QASAAYOWCgIC8DoIBF2NhLXB1Yi02MjE5ODExNzQ3MDQ5MzcxoAGL4oqgAagDBMgDCqoEtwJP0F-GJX3HmXbpScqG_Qel7AIRhhqjDZna4pABUfVpkwJ5W5IE-PYT4c8kMtpDN3WB5GBsNjMBWtCrvOVzydwNH-Q2PcR8RXrZRnMOFE7Dn5Z0RMzYtbfSMxVJU92UNqrBH4jFmtOzd2U2_f87-TtUBdfsdCSzYeV9PwEReAOUcpQFkLDtqEIaC6H8nh6AqkESswGwmfDiT6M6FQKA9rqfqT7iVHjbPxRGd0MQdAmCGKFDVGdJS6Fw8RUS0BPWZD1W-xgHOGXpU4XPxKWuZ_77qyu-Aps1QLvjXsP6feyyQGTOKUxIh71Uo-2dqfly8lxkCtlCLhk9lDcYhd3-7WRX51S43SV1-ZMEuFXF5Od25f4SE3NXN5KlGbA7fdISH83vf1OMD2m8CzRGDt4WA4GiNkVDttbSSogFqLnnzFWSBQgIE3iLgPDgAqAGoQGAB92d9d8CkAcEqAfywLECqAe4xLECqAfhtrECqAelz7ECqAfnnbECqAfonbECqAf507ECqAfJ2rECqAep4LECqAem1LECqAeo0huoB7HcG6gHsJuxAqgHrrGxAqgH_bKxAqgHyM-xAqgHyc-xAqgHzcexAqgH8dGxAqgH_NWxAqgH-9WxAqgHjNaxAqgHi9axAqgHmuKxAqgHm-KxAqgHndexAqgHvOqxAqgHndSxAqgHgcYbqAf8r7ECqAfVzhuoB77ZsQKoB6vFG6gHnNwbqAe3obECqAfVqbECqAfn2rECqAfetbECkggLVzJHLUc5QnJFYmOoCAHSCC4IgEEQARheMgKCAjoPgEKAwICAgICAgAKqgIAYSNmg0jVQFFioyNyN7Z-XA2ABmgkraHR0cHM6Ly93d3cuYWRvYmUuY29tL2luL2NyZWF0aXZlY2xvdWQuaHRtbLEJYSyiihkOozrICRfICY8ByAnCAcgJlwK6Cz0IAxAFGAQgBygBMBxAAUgAWH1gAGgAcAGIAQCYAQGiAQgKAKgCAdgCAqgBAdgBA4ACAYgCBboDBXZpc2lu0AsS4AsBogwZahIKEGNvbS5hZG9iZS5yZWFkZXJ4AIgBANIMAhABmg0BEqoNAklOyA0B0g2rBGh0dHBzOi8vYWQuZG91YmxlY2xpY2submV0L2RkbS90cmFja2Nsay9OOTcyOTUyLjI3OTM4MkJJRE1BTkFHRVJfREZBU0lURS9CMjYxMjYyMDAuMzE3MTM5NDU5O2RjX3Rya19haWQ9NTA5OTYyODczO2RjX3Rya19jaWQ9MTU5OTQzMzE3O2RjX2RibV90b2tlbj1BT2plTE5FQUFBQTdDalFLREFnQUZRQUFBQUFkQUFBQUFCSU1DQUFWQUFBQUFCMEFBQUFBSWhRSXFMbm56RldvQW91QThPQUNzQUxFbXVQbUEwQTdFSmZudWdHRWU5Tmk1TUc0WWZhdlJFZVRob3J5O2RjX2xhdD07ZGNfcmRpZD07dGFnX2Zvcl9jaGlsZF9kaXJlY3RlZF90cmVhdG1lbnQ9O3RmdWE9O2x0ZD07ZGNfdGR2PTE7ZGNfdHJhbnNwYXJlbnQ9MTtkY19ydWk9MTtkY19lcHM9QUhhczhjQXlXeV8tbGNka05GLVdHN043QWhsNTk1Q2ROWlVtbXVVU2RpdmtoQktoUy15TnZWb2N6MENHYkxhUThnZ2tneXp1bzdiZnlfLTFuc2JwVEE7ZGNfcHViaWQ9Nj9odHRwczovL3d3dy5hZG9iZS5jb20vaW4vY3JlYXRpdmVjbG91ZC5odG1sP3NkaWQ9OEROODU3TFkmbXY9c29jaWFsJm12Mj1wYWlkc29jJmdhZF9zb3VyY2U9MrATgtOeJbgT____________AbAUA8AVgYCAQNAVAdgVAZgWAagWAeIWAggBgBcBihcYCAMYASABKAEwATgBQAFIAVABWAFgAmgBoBcBqRdXv8ICGj4Y8LoXBigAMAA4AdAYAfAYAQ&gclid=EAIaIQobChMI7Pzcje2flwMV4p9LBR0KpSGAEAEYASAAEgKLtPD_BwE&num=1&cid=CAASqgHkaMZvmjm-xu-FeGOQGfrv1FRtR2k89OB4bSjlQanjXAgqH85k1TUv5tLay--PE0a5oFm_GZ-9tExDHu0fP7qvDCdFYQ6bj-eg_2-p_QyMsH0vQpDhp_7HAymCno8sqLFj02pNMetNRe-gVlIAUx9zX2ZGaOgOqVpHTJYLp5ykkKXjogIVVu2ugKYGGS-YVkDqoTXMy90c6DpP-58efWkCP69WKOqB7FcfVA&ad_cpn=%5BCPN%5D&sig=AOD64_1Txx7ht9kMfvDR5GpGT-e2trM17Q&ctype=110&video_id=W2G-G9BrEbc&label=video_click_to_advertiser_site&ms=%5BCLICK_MS%5D&nb=8&nx=%5BNX%5D&ny=%5BNY%5D&dim=%5BDIM%5D
+          - generic [ref=e488]:
+            - link [aria-hidden] [ref=e490] [cursor=pointer]:
+              - /url: /watch?v=EW41mBzvCVQ&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e492] [cursor=pointer]:
+              - generic [ref=e493]:
+                - heading [level=3] [ref=e495]:
+                  - link "You Laugh You Lose 😅 Best Funny Cats and Dogs Videos 😹🐶 36 minutes" [ref=e496]:
+                    - /url: /watch?v=EW41mBzvCVQ&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: You Laugh You Lose 😅 Best Funny Cats and Dogs Videos 😹🐶
+                - generic [ref=e499]:
+                  - generic [ref=e500]: 26M
+                  - generic [ref=e501]: •1y ago
+              - generic [ref=e502]:
+                - link "Go to channel Purrfect Pets" [ref=e503]:
+                  - /url: /@PurrfectPets24
+                - link "Purrfect Pets" [ref=e508]:
+                  - /url: /@PurrfectPets24
+              - generic [ref=e509]:
+                - text: Welcome to Purrfect Pets! The perfect place for the cutest, funniest, and most lovable pet moments Thanks for watching our ...
+                - tooltip "tooltip"
+          - generic [ref=e511]:
+            - link [aria-hidden] [ref=e513] [cursor=pointer]:
+              - /url: /watch?v=3URtTIdnXIk&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e515] [cursor=pointer]:
+              - generic [ref=e516]:
+                - heading [level=3] [ref=e518]:
+                  - link "These CATS are too FUNNY! 🤣 | New Cat Videos 1 hour" [ref=e519]:
+                    - /url: /watch?v=3URtTIdnXIk&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: These CATS are too FUNNY! 🤣 | New Cat Videos
+                - generic [ref=e522]:
+                  - generic [ref=e523]: 26M
+                  - generic [ref=e524]: •1y ago
+              - generic [ref=e525]:
+                - link "Go to channel The Pet Collective" [ref=e526]:
+                  - /url: /@petcollective
+                - generic [ref=e527]:
+                  - link "The Pet Collective" [ref=e531]:
+                    - /url: /@petcollective
+                  - img "Verified" [ref=e536]
+              - generic [ref=e538]:
+                - generic [ref=e539]: "You like cats? We got em! No dogs! Just cats! Seriously, all cats! #Funny #fails #Cats ✨ Subscribe to The Scoop for our most ..."
+                - tooltip "tooltip"
+          - generic [ref=e540]:
+            - heading "Hilarious Cat Antics✨" [level=2] [ref=e548]
+            - generic [ref=e550]:
+              - generic [ref=e553]:
+                - link [aria-hidden] [ref=e554] [cursor=pointer]:
+                  - /url: /shorts/M93h41hyPsM
+                - generic [ref=e558] [cursor=pointer]:
+                  - generic [ref=e559]:
+                    - heading [level=3] [ref=e560]:
+                      - link "Ranking Funny Cat Moment" [ref=e561]:
+                        - /url: /shorts/M93h41hyPsM
+                    - generic [ref=e562]: 16M views
+                  - button "More actions" [ref=e564]
+              - generic [ref=e570]:
+                - link [aria-hidden] [ref=e571] [cursor=pointer]:
+                  - /url: /shorts/5vy9TgKBTHs
+                  - img [ref=e576]:
+                    - generic [aria-hidden] [ref=e577]: New
+                - generic [ref=e578] [cursor=pointer]:
+                  - generic [ref=e579]:
+                    - heading [level=3] [ref=e580]:
+                      - link "Funny Cat Videos 😻 Ming playing Rubik 🧮 (8)" [ref=e581]:
+                        - /url: /shorts/5vy9TgKBTHs
+                    - generic [ref=e582]: 82K views
+                  - button "More actions" [ref=e584]
+              - generic [ref=e590]:
+                - link [aria-hidden] [ref=e591] [cursor=pointer]:
+                  - /url: /shorts/xSFIMd92bHc
+                  - img [ref=e596]:
+                    - generic [aria-hidden] [ref=e597]: New
+                - generic [ref=e598] [cursor=pointer]:
+                  - generic [ref=e599]:
+                    - heading [level=3] [ref=e600]:
+                      - 'link "This cat is really alive! 🥰🐈🔔 #funny #cats #catvideos #tiktok #social #usafunny #catlovers #funpage" [ref=e601]':
+                        - /url: /shorts/xSFIMd92bHc
+                    - generic [ref=e602]: 32K views
+                  - button "More actions" [ref=e604]
+              - generic [ref=e610]:
+                - link [aria-hidden] [ref=e611] [cursor=pointer]:
+                  - /url: /shorts/o-vVtivsmZ4
+                  - img [ref=e616]:
+                    - generic [aria-hidden] [ref=e617]: New
+                - generic [ref=e618] [cursor=pointer]:
+                  - generic [ref=e619]:
+                    - heading [level=3] [ref=e620]:
+                      - 'link "This cat is really alive! 🥰 #funny #cats #catvideos #tiktok #social #usafunny #catlovers #funpage" [ref=e621]':
+                        - /url: /shorts/o-vVtivsmZ4
+                    - generic [ref=e622]: 131K views
+                  - button "More actions" [ref=e624]
+              - generic [ref=e630]:
+                - link [aria-hidden] [ref=e631] [cursor=pointer]:
+                  - /url: /shorts/XYWjhpyYcjg
+                  - img [ref=e636]:
+                    - generic [aria-hidden] [ref=e637]: New
+                - generic [ref=e638] [cursor=pointer]:
+                  - generic [ref=e639]:
+                    - heading [level=3] [ref=e640]:
+                      - link "This cat is really alive!X#funny#cats#catvideos#tiktok#social#usafunny#catlovers#funpage" [ref=e641]:
+                        - /url: /shorts/XYWjhpyYcjg
+                    - generic [ref=e642]: 150K views
+                  - button "More actions" [ref=e644]
+          - generic [ref=e649]:
+            - link [aria-hidden] [ref=e651] [cursor=pointer]:
+              - /url: /watch?v=oSLdVewDigE&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e653] [cursor=pointer]:
+              - generic [ref=e654]:
+                - heading [level=3] [ref=e656]:
+                  - link "Watch Out For These Hilarious CATS! 🤣 Funniest Cat Videos 10 minutes, 23 seconds" [ref=e657]:
+                    - /url: /watch?v=oSLdVewDigE&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: Watch Out For These Hilarious CATS! 🤣 Funniest Cat Videos
+                - generic [ref=e660]:
+                  - generic [ref=e661]: 110K
+                  - generic [ref=e662]: •3d ago
+              - generic [ref=e663]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e664]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e665]:
+                  - link "Funny And Cute Cat's Life" [ref=e669]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e674]
+              - generic [ref=e676]:
+                - generic [ref=e677]: Watch Out For These Hilarious CATS! Funniest Cat Videos These hilarious cats are completely broken today! They are ...
+                - tooltip "tooltip"
+              - img "New" [ref=e682]:
+                - generic [aria-hidden] [ref=e683]: New
+              - generic [ref=e686]:
+                - generic [ref=e687]:
+                  - generic [ref=e688]: Summary
+                  - button "Funny And Cute Cat's Life showcases various feline antics ranging from peculiar sleeping positions and failed athletic attempts to unusual interactions with water and household objects. These clips highlight the unpredictable, chaotic, and often lazy nature of cats as they navigate their daily routines in humorous ways." [ref=e691]
+                  - text: ·
+                - button "More" [ref=e696]
+          - generic [ref=e701]:
+            - link [aria-hidden] [ref=e703] [cursor=pointer]:
+              - /url: /watch?v=ZZvL5mt0wHM&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e705] [cursor=pointer]:
+              - generic [ref=e706]:
+                - heading [level=3] [ref=e708]:
+                  - 'link "Try Not To Laugh 🤣 Best Funny Cats and Dogs Videos 2026 😺🐶 #47 1 hour, 1 minute" [ref=e709]':
+                    - /url: /watch?v=ZZvL5mt0wHM&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: "Try Not To Laugh 🤣 Best Funny Cats and Dogs Videos 2026 😺🐶 #47"
+                - generic [ref=e712]:
+                  - generic [ref=e713]: 332K
+                  - generic [ref=e714]: •1mo ago
+              - generic [ref=e715]:
+                - link "Go to channel Chuckle Pets" [ref=e716]:
+                  - /url: /@chucklepets99
+                - link "Chuckle Pets" [ref=e721]:
+                  - /url: /@chucklepets99
+              - generic [ref=e722]:
+                - text: Think you can keep a straight face? Try getting through this unscripted, chaotic compilation of the absolute dumbest dog ...
+                - tooltip "tooltip"
+          - generic [ref=e724]:
+            - link [aria-hidden] [ref=e726] [cursor=pointer]:
+              - /url: /watch?v=UndgavFmTkU&pp=ygUKZnVubnkgY2F0c9IHCQktDAGHKiGM7w%3D%3D
+            - generic [ref=e728] [cursor=pointer]:
+              - generic [ref=e729]:
+                - heading [level=3] [ref=e731]:
+                  - link "😂 Funniest Cats & Dogs 2026 | Try Not To Laugh Challenge 15 minutes" [ref=e732]:
+                    - /url: /watch?v=UndgavFmTkU&pp=ygUKZnVubnkgY2F0c9IHCQktDAGHKiGM7w%3D%3D
+                    - text: 😂 Funniest Cats & Dogs 2026 | Try Not To Laugh Challenge
+                - generic [ref=e735]:
+                  - generic [ref=e736]: 2.1M
+                  - generic [ref=e737]: •5mo ago
+              - generic [ref=e738]:
+                - link "Go to channel MeowMiau" [ref=e739]:
+                  - /url: /@MeowMiauCats
+                - link "MeowMiau" [ref=e744]:
+                  - /url: /@MeowMiauCats
+              - generic [ref=e745]:
+                - generic [ref=e746]: Watch the funniest cats and dogs of 2026 in this try not to laugh challenge. Enjoy cute pets, hilarious fails, and viral moments in ...
+                - tooltip "tooltip"
+          - generic [ref=e748]:
+            - link [aria-hidden] [ref=e750] [cursor=pointer]:
+              - /url: /watch?v=SICma10Kls4&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e752] [cursor=pointer]:
+              - generic [ref=e753]:
+                - heading [level=3] [ref=e755]:
+                  - link "Laugh until you cry with these hilarious animals 😂 20 minutes" [ref=e756]:
+                    - /url: /watch?v=SICma10Kls4&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: Laugh until you cry with these hilarious animals 😂
+                - generic [ref=e759]:
+                  - generic [ref=e760]: 41M
+                  - generic [ref=e761]: •2y ago
+              - generic [ref=e762]:
+                - link "Go to channel Animaux Drôles" [ref=e763]:
+                  - /url: /@animauxdrolesv5
+                - link "Animaux Drôles" [ref=e768]:
+                  - /url: /@animauxdrolesv5
+              - generic [ref=e769]:
+                - text: Laugh until you cry with these hilarious animals 😂 Welcome to ANIMAUX DRÔLES funny animals channel ♥ You can enjoy best funny ...
+                - tooltip "tooltip"
+          - generic [ref=e771]:
+            - link [aria-hidden] [ref=e773] [cursor=pointer]:
+              - /url: /watch?v=vfWkB5cWoY4&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e775] [cursor=pointer]:
+              - generic [ref=e776]:
+                - heading [level=3] [ref=e778]:
+                  - link "The Funniest CATS of 2026...So Far 😂 TOP Funny Cats Video 31 minutes" [ref=e779]:
+                    - /url: /watch?v=vfWkB5cWoY4&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: The Funniest CATS of 2026...So Far 😂 TOP Funny Cats Video
+                - generic [ref=e782]:
+                  - generic [ref=e783]: 1.1M
+                  - generic [ref=e784]: •8mo ago
+              - generic [ref=e785]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e786]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e787]:
+                  - link "Funny And Cute Cat's Life" [ref=e791]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e796]
+              - generic [ref=e798]:
+                - generic [ref=e799]: The Funniest CATS of 2026...So Far TOP Funny Cats Video 2026 is officially the year of cat chaos, and we are here for it! These ...
+                - tooltip "tooltip"
+              - generic [ref=e802]:
+                - generic [ref=e803]:
+                  - generic [ref=e804]: Summary
+                  - button "Funny And Cute Cat's Life showcases a compilation of mischievous felines causing chaos at home, from knocking over kitchen items to getting stuck in tight spots. These curious companions explore their environment, often with hilarious results that test the limits of their agility and curiosity." [ref=e807]
+                  - text: ·
+                - button "More" [ref=e812]
+          - generic [ref=e817]:
+            - link [aria-hidden] [ref=e819] [cursor=pointer]:
+              - /url: /watch?v=U2G9No0vUaM&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e821] [cursor=pointer]:
+              - generic [ref=e822]:
+                - heading [level=3] [ref=e824]:
+                  - link "Cats Have the Funniest Personality 😭🤣 Hilarious Cats Video 31 minutes" [ref=e825]:
+                    - /url: /watch?v=U2G9No0vUaM&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: Cats Have the Funniest Personality 😭🤣 Hilarious Cats Video
+                - generic [ref=e828]:
+                  - generic [ref=e829]: 148K
+                  - generic [ref=e830]: •6d ago
+              - generic [ref=e831]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e832]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e833]:
+                  - link "Funny And Cute Cat's Life" [ref=e837]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e842]
+              - generic [ref=e844]:
+                - generic [ref=e845]: Cats Have the Funniest Personality Hilarious Cats Video Living with a cat means dealing with five different personalities in a ...
+                - tooltip "tooltip"
+              - img "New" [ref=e850]:
+                - generic [aria-hidden] [ref=e851]: New
+              - generic [ref=e854]:
+                - generic [ref=e855]:
+                  - generic [ref=e856]: Summary
+                  - button "Funny And Cute Cat's Life captures feline antics across diverse environments. From household mischief and unexpected interactions with other pets to peculiar habits and clever problem-solving, these clips showcase the unpredictable and often chaotic nature of cats in daily life." [ref=e859]
+                  - text: ·
+                - button "More" [ref=e864]
+          - generic [ref=e868]:
+            - heading "Hilarious Cats Compilation✨" [level=2] [ref=e876]
+            - generic [ref=e878]:
+              - generic [ref=e881]:
+                - link [aria-hidden] [ref=e882] [cursor=pointer]:
+                  - /url: /shorts/NdRgBmKPfcc
+                - generic [ref=e886] [cursor=pointer]:
+                  - generic [ref=e887]:
+                    - heading [level=3] [ref=e888]:
+                      - 'link "This cat is really alive! 🥰 #funny #cats #catvideos #tiktok #social #usafunny #catlovers #funpage" [ref=e889]':
+                        - /url: /shorts/NdRgBmKPfcc
+                    - generic [ref=e890]: 303M views
+                  - button "More actions" [ref=e892]
+              - generic [ref=e898]:
+                - link [aria-hidden] [ref=e899] [cursor=pointer]:
+                  - /url: /shorts/UVOJG9bEHmA
+                - generic [ref=e903] [cursor=pointer]:
+                  - generic [ref=e904]:
+                    - heading [level=3] [ref=e905]:
+                      - 'link "Funniest cats || top funny cat video #cat #catshorts #cute #funny #funnyshorts #kitten #shorts" [ref=e906]':
+                        - /url: /shorts/UVOJG9bEHmA
+                    - generic [ref=e907]: 395K views
+                  - button "More actions" [ref=e909]
+              - generic [ref=e915]:
+                - link [aria-hidden] [ref=e916] [cursor=pointer]:
+                  - /url: /shorts/BgYYGCTenX4
+                  - img [ref=e921]:
+                    - generic [aria-hidden] [ref=e922]: New
+                - generic [ref=e923] [cursor=pointer]:
+                  - generic [ref=e924]:
+                    - heading [level=3] [ref=e925]:
+                      - 'link "This cat is really alive! 🥰 #funny #cats #catvideos #tiktok #social #usafunny #catlovers #funpage" [ref=e926]':
+                        - /url: /shorts/BgYYGCTenX4
+                    - generic [ref=e927]: 105K views
+                  - button "More actions" [ref=e929]
+              - generic [ref=e935]:
+                - link [aria-hidden] [ref=e936] [cursor=pointer]:
+                  - /url: /shorts/70PNOGeE2AE
+                  - img [ref=e941]:
+                    - generic [aria-hidden] [ref=e942]: New
+                - generic [ref=e943] [cursor=pointer]:
+                  - generic [ref=e944]:
+                    - heading [level=3] [ref=e945]:
+                      - 'link "This cat is really alive!#funny #cats#catvideos#tiktok #social#usafunny#catlovers#funpage" [ref=e946]':
+                        - /url: /shorts/70PNOGeE2AE
+                    - generic [ref=e947]: 42K views
+                  - button "More actions" [ref=e949]
+              - generic [ref=e955]:
+                - link [aria-hidden] [ref=e956] [cursor=pointer]:
+                  - /url: /shorts/8zIFAPkUplA
+                  - img [ref=e961]:
+                    - generic [aria-hidden] [ref=e962]: New
+                - generic [ref=e963] [cursor=pointer]:
+                  - generic [ref=e964]:
+                    - heading [level=3] [ref=e965]:
+                      - 'link "This cat is really alive! 🥰 #funny #cats #catvideos #tiktok #social #usafunny #catlovers #funpage" [ref=e966]':
+                        - /url: /shorts/8zIFAPkUplA
+                    - generic [ref=e967]: 4.8K views
+                  - button "More actions" [ref=e969]
+          - generic [ref=e974]:
+            - link [aria-hidden] [ref=e976] [cursor=pointer]:
+              - /url: /watch?v=mQoCMIh5I2M&pp=ygUKZnVubnkgY2F0cw%3D%3D
+            - generic [ref=e978] [cursor=pointer]:
+              - generic [ref=e979]:
+                - heading [level=3] [ref=e981]:
+                  - link "The Funniest CATS... So Far 😂 TOP Funny Cats Video 2026 30 minutes" [ref=e982]:
+                    - /url: /watch?v=mQoCMIh5I2M&pp=ygUKZnVubnkgY2F0cw%3D%3D
+                    - text: The Funniest CATS... So Far 😂 TOP Funny Cats Video 2026
+                - generic [ref=e985]:
+                  - generic [ref=e986]: 793K
+                  - generic [ref=e987]: •6mo ago
+              - generic [ref=e988]:
+                - link "Go to channel Funny And Cute Cat's Life" [ref=e989]:
+                  - /url: /@FunnyandcuteCatLife
+                - generic [ref=e990]:
+                  - link "Funny And Cute Cat's Life" [ref=e994]:
+                    - /url: /@FunnyandcuteCatLife
+                  - img "Verified" [ref=e999]
+              - generic [ref=e1001]:
+                - generic [ref=e1002]: The Funniest CATS... So Far TOP Funny Cats Video 2026 The funniest cats of 2026 are finally here! We have picked the ...
+                - tooltip "tooltip"
+              - generic [ref=e1005]:
+                - generic [ref=e1006]:
+                  - generic [ref=e1007]: Summary
+                  - button "Funny And Cute Cat's Life showcases felines engaging in unexpected behaviors, from attempting precarious jumps and invading personal space to showing surprising hunting instincts. These furry companions demonstrate their quirky personalities and create unforgettable, chaotic moments around their human counterparts." [ref=e1010]
+                  - text: ·
+                - button "More" [ref=e1015]
+          - generic [ref=e1019]:
+            - heading "Shorts" [level=2] [ref=e1027]
+            - generic [ref=e1028]:
+              - generic [ref=e1029]:
+                - generic [ref=e1032]:
+                  - link [aria-hidden] [ref=e1033] [cursor=pointer]:
+                    - /url: /shorts/KId3r5dVwGk
+                  - generic [ref=e1037] [cursor=pointer]:
+                    - generic [ref=e1038]:
+                      - heading [level=3] [ref=e1039]:
+                        - 'link "Boom,Scared me! #exlittlebeans #funny_cats #cat #funny_videos" [ref=e1040]':
+                          - /url: /shorts/KId3r5dVwGk
+                      - generic [ref=e1041]: 663M views
+                    - button "More actions" [ref=e1043]
+                - generic [ref=e1049]:
+                  - link [aria-hidden] [ref=e1050] [cursor=pointer]:
+                    - /url: /shorts/YzOtX_BpoME
+                  - generic [ref=e1054] [cursor=pointer]:
+                    - generic [ref=e1055]:
+                      - heading [level=3] [ref=e1056]:
+                        - 'link "Weird Cats Moments, But Funny 🙀 #funny #cat" [ref=e1057]':
+                          - /url: /shorts/YzOtX_BpoME
+                      - generic [ref=e1058]: 34M views
+                    - button "More actions" [ref=e1060]
+                - generic [ref=e1066]:
+                  - link [aria-hidden] [ref=e1067] [cursor=pointer]:
+                    - /url: /shorts/6kSCVqZdhZ0
+                  - generic [ref=e1071] [cursor=pointer]:
+                    - generic [ref=e1072]:
+                      - heading [level=3] [ref=e1073]:
+                        - 'link "Kitty is thicker than a Snicker! || 😻😂😻 #shorts Funny cats!" [ref=e1074]':
+                          - /url: /shorts/6kSCVqZdhZ0
+                      - generic [ref=e1075]: 10M views
+                    - button "More actions" [ref=e1077]
+                - generic [ref=e1083]:
+                  - link [aria-hidden] [ref=e1084] [cursor=pointer]:
+                    - /url: /shorts/TsIvLpSJQbk
+                  - generic [ref=e1088] [cursor=pointer]:
+                    - generic [ref=e1089]:
+                      - heading [level=3] [ref=e1090]:
+                        - 'link "Ranking Funny Cat Moments🤣 #shorts" [ref=e1091]':
+                          - /url: /shorts/TsIvLpSJQbk
+                      - generic [ref=e1092]: 127M views
+                    - button "More actions" [ref=e1094]
+                - generic [ref=e1100]:
+                  - link [aria-hidden] [ref=e1101] [cursor=pointer]:
+                    - /url: /shorts/A54DmtWBFA8
+                  - generic [ref=e1105] [cursor=pointer]:
+                    - generic [ref=e1106]:
+                      - heading [level=3] [ref=e1107]:
+                        - link "Ranking Funniest Cat Moments" [ref=e1108]:
+                          - /url: /shorts/A54DmtWBFA8
+                      - generic [ref=e1109]: 18M views
+                    - button "More actions" [ref=e1111]
+              - generic [ref=e1115]:
+                - generic [ref=e1118]:
+                  - link [aria-hidden] [ref=e1119] [cursor=pointer]:
+                    - /url: /shorts/mt7K46UN_34
+                  - generic [ref=e1123] [cursor=pointer]:
+                    - generic [ref=e1124]:
+                      - heading [level=3] [ref=e1125]:
+                        - 'link "Top 5 funny cat moments #rankingshorts #topfunnymoments #shortvideo #top5cats #kucinglucu #catcore #" [ref=e1126]':
+                          - /url: /shorts/mt7K46UN_34
+                      - generic [ref=e1127]: 13M views
+                    - button "More actions" [ref=e1129]
+                - generic [ref=e1135]:
+                  - link [aria-hidden] [ref=e1136] [cursor=pointer]:
+                    - /url: /shorts/EM41yq0OUQ4
+                  - generic [ref=e1140] [cursor=pointer]:
+                    - generic [ref=e1141]:
+                      - heading [level=3] [ref=e1142]:
+                        - 'link "Amazing Cat Performs Magic Trick! #Cats #Tricks" [ref=e1143]':
+                          - /url: /shorts/EM41yq0OUQ4
+                      - generic [ref=e1144]: 60M views
+                    - button "More actions" [ref=e1146]
+                - generic [ref=e1152]:
+                  - link [aria-hidden] [ref=e1153] [cursor=pointer]:
+                    - /url: /shorts/bBQPWRN6o1o
+                  - generic [ref=e1157] [cursor=pointer]:
+                    - generic [ref=e1158]:
+                      - heading [level=3] [ref=e1159]:
+                        - link "Ranking the funniest cat moments" [ref=e1160]:
+                          - /url: /shorts/bBQPWRN6o1o
+                      - generic [ref=e1161]: 6.7M views
+                    - button "More actions" [ref=e1163]
+                - generic [ref=e1169]:
+                  - link [aria-hidden] [ref=e1170] [cursor=pointer]:
+                    - /url: /shorts/kytO0sMsuIQ
+                  - generic [ref=e1174] [cursor=pointer]:
+                    - generic [ref=e1175]:
+                      - heading [level=3] [ref=e1176]:
+                        - 'link "Cat Broke the Vase, Dog Got Blamed! 😅 | Funny Cat and Dog Moment #shorts #funny #cat" [ref=e1177]':
+                          - /url: /shorts/kytO0sMsuIQ
+                      - generic [ref=e1178]: 4.9M views
+                    - button "More actions" [ref=e1180]
+                - generic [ref=e1186]:
+                  - link [aria-hidden] [ref=e1187] [cursor=pointer]:
+                    - /url: /shorts/QOCfNwH0HFg
+                  - generic [ref=e1191] [cursor=pointer]:
+                    - generic [ref=e1192]:
+                      - heading [level=3] [ref=e1193]:
+                        - 'link "Ranking Cat Hide&seek Core Moments #cat #funnycats" [ref=e1194]':
+                          - /url: /shorts/QOCfNwH0HFg
+                      - generic [ref=e1195]: 52K views
+                    - button "More actions" [ref=e1197]
+            - button "Show more" [ref=e1204] [cursor=pointer]

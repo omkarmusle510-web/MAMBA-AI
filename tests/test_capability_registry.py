@@ -115,7 +115,14 @@ def test_capability_status_mutation():
     """Test updating capability status and provider configuration."""
     registry = default_capability_registry()
 
-    # Initially email is available (simulated provider)
+    # Simulated providers are NOT advertised as available by default.
+    assert registry.is_available("email") is False
+    assert registry.get_status("email") == CapabilityStatus.NOT_CONFIGURED
+
+    # Explicit opt-in (dev/test simulated provider) marks it available.
+    registry.set_status(
+        "email", CapabilityStatus.AVAILABLE, provider="simulated", provider_configured=True
+    )
     assert registry.is_available("email") is True
 
     # Mark email as NOT_CONFIGURED
@@ -132,6 +139,40 @@ def test_capability_status_mutation():
     # Setting status on non-existent capability raises KeyError
     with pytest.raises(KeyError):
         registry.set_status("nonexistent", CapabilityStatus.DISABLED)
+
+
+def test_every_advertised_action_has_a_live_handler():
+    """Anti-drift invariant: advertised actions must map to real registered handlers.
+
+    The live mixed-task executor's handler map is the single source of truth for
+    what can actually execute. The capability registry (what the planner sees)
+    must never advertise more than that.
+    """
+    executor = create_mixed_task_executor()
+    wired = set(executor.handlers or {})
+    assert wired, "the mixed executor must expose its handler map"
+
+    registry = default_capability_registry()
+    unrouted = {
+        cap.capability_id: [a for a in cap.supported_actions if a not in wired]
+        for cap in registry.list_capabilities()
+        if any(a not in wired for a in cap.supported_actions)
+    }
+    assert unrouted == {}, f"capabilities advertise unrouted actions: {unrouted}"
+
+
+def test_simulated_providers_are_not_advertised_by_default():
+    """Simulated email/calendar/messaging must not claim availability by default."""
+    registry = default_capability_registry()
+    for cap_id in ("email", "calendar", "messaging"):
+        assert registry.is_available(cap_id) is False, cap_id
+        assert registry.get_status(cap_id) == CapabilityStatus.NOT_CONFIGURED, cap_id
+        assert "not configured" in registry.get_capability(cap_id).format_summary_line()
+
+    # The planner-facing summary must not present them as available.
+    summary = registry.format_summary_for_planner()
+    for cap_id in ("email", "calendar", "messaging"):
+        assert f"- {cap_id} (available)" not in summary
 
 
 # =====================================================================

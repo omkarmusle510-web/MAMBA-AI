@@ -355,6 +355,23 @@ def _step_signature(step: PlanStep) -> tuple[str, str, str]:
     return (step.intent.strip().lower(), step.description.strip().lower(), f"{app}|{target}")
 
 
+_APPROVAL_TTL_SECONDS: float = 120.0
+"""How long a paused approval remains valid before it is discarded."""
+
+
+def _approval_signature(step: PlanStep) -> tuple[str, str, str, str]:
+    """The exact action + bound target an approval is granted for.
+
+    Extends the step fingerprint with the pinned window identity (handle and
+    owning PID) when one is bound, so an approval given for one target can
+    never authorize execution against a different one.
+    """
+    base = _step_signature(step)
+    hwnd = str(step.metadata.get("hwnd") or "").strip()
+    pid = str(step.metadata.get("target_pid") or "").strip()
+    return (*base, f"{hwnd}|{pid}")
+
+
 def _plan_signature(plan: ExecutionPlan) -> tuple[tuple[str, str, str], ...]:
     """A fingerprint used to detect a planner repeating an identical plan."""
     return tuple(_step_signature(step) for step in plan.steps)
@@ -488,6 +505,10 @@ class PendingApproval:
     step_index: int
     user_request: UserRequest
     reason: str
+    signature: tuple[str, str, str, str]
+    """The action + bound target the user is being asked about, captured when
+    the step paused. A later execution is only covered when it matches this."""
+    created_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(slots=True)
@@ -523,6 +544,14 @@ class Brain:
     supplied by a plan, so this cannot be forged or guessed from model output.
     """
 
+    _approved_signatures: set[tuple[str, str, str, str]] = field(
+        default_factory=set, init=False
+    )
+    """The action + bound target each recorded approval was granted for.
+
+    An id alone is not enough: the executing step must still carry the same
+    fingerprint — including its pinned window identity — or it is re-asked."""
+
     def __post_init__(self) -> None:
         if self.permissions is None:
             self.permissions = DefaultPermissionPolicy()
@@ -534,6 +563,7 @@ class Brain:
         self._last_turn_context = None
         self._active_entities = {}
         self._approved_step_ids = set()
+        self._approved_signatures = set()
 
         # Memory Manager initialization
         if self.memory_manager is not None:
@@ -658,7 +688,7 @@ class Brain:
         if rep_match:
             if self._pending_approval is not None:
                 self._pending_approval = None
-                self._approved_step_ids.clear()
+                self._clear_approvals()
             replacement_goal = rep_match.group("replacement").strip()
             user_request = replace(user_request, goal=replacement_goal)
 
@@ -738,7 +768,7 @@ class Brain:
             if self._pending_approval is not None:
                 pending = self._pending_approval
                 self._pending_approval = None
-                self._approved_step_ids.clear()
+                self._clear_approvals()
                 context = ExecutionContext.from_request(user_request)
                 context.transition_to(ExecutionState.PLANNING)
                 msg = f"Operation '{pending.step.description}' was cancelled."
@@ -763,7 +793,7 @@ class Brain:
         # An unrelated request is not an approval of anything: drop prior
         # approvals so a later step cannot inherit one. Approval turns return
         # above, so this never runs on the turn that consumes an approval.
-        self._approved_step_ids.clear()
+        self._clear_approvals()
 
         # ── 1e. Conversational Referent Resolution ──
         resolved_goal = self._resolve_referents(user_request.goal)
@@ -831,9 +861,27 @@ class Brain:
             ExecutionState.CANCELLED,
         ):
             context.record.mark_cancelled()
+        # Cancellation is also a revocation: no paused approval may survive it,
+        # and no previously granted approval is carried into a later turn.
+        self.revoke_pending_approval()
         if progress:
             progress("Cancelled")
         return context.record.to_result(output="Cancelled")
+
+    def revoke_pending_approval(self) -> None:
+        """Invalidate any paused approval and every prior grant.
+
+        Safe to call at any time (an explicit cancel, a disconnect, or a
+        cancellation that unwinds a turn): afterwards a stale approval can no
+        longer be resumed, and no step can execute on an old grant.
+        """
+        self._pending_approval = None
+        self._clear_approvals()
+
+    def _clear_approvals(self) -> None:
+        """Drop all recorded approvals — ids and their action+target signatures."""
+        self._approved_step_ids.clear()
+        self._approved_signatures.clear()
 
     def route_model(self, request: ModelRequest) -> ModelProvider | None:
         """Route a model request through the model router if configured."""
@@ -1233,22 +1281,7 @@ class Brain:
                     if self._pending_approval
                     else "action requires user confirmation"
                 )
-                prompt_msg = (
-                    f"Action requires user confirmation: {reason}. Do you want to proceed?"
-                )
-                obs = Observation(
-                    step_id=(
-                        self._pending_approval.step.id
-                        if self._pending_approval
-                        else "approval"
-                    ),
-                    content=prompt_msg,
-                    success=False,
-                    metadata={"permission_decision": "ask", "awaiting_approval": True},
-                )
-                context.add_observation(obs)
-                context.mark_failed(prompt_msg)
-                return context.record.to_result(output=prompt_msg)
+                return self._awaiting_approval_result(context, reason)
 
             if outcome == _StepOutcome.FAILED:
                 # Context already marked failed
@@ -1354,6 +1387,9 @@ class Brain:
                     step_index=idx,
                     user_request=user_request,
                     reason=info,
+                    # Capture the approved identity NOW: a user "yes" applies to
+                    # this action + bound target only, never to a later mutation.
+                    signature=_approval_signature(step),
                 )
                 return _StepOutcome.AWAITING_APPROVAL
             else:
@@ -1837,10 +1873,63 @@ class Brain:
                     if isinstance(expected, dict) and _UI_TEXT_PREDICATE_KEY in expected:
                         step.metadata.pop("expected", None)
 
+            # Pre-bind the exact window this step will act on, through the same
+            # binding path the executing skill uses. The pinned identity (handle,
+            # owning process, class) is what a user approval refers to, and it is
+            # re-verified live immediately before the keystrokes are sent — so a
+            # stale, foreign, or ambiguous target stops the step here, before
+            # permission, instead of being guessed at execution time.
+            prebind_error = self._prebind_cross_app_window(step)
+            if prebind_error:
+                return prebind_error
+
             # Pin the payload used for typing and for verification.
             step.metadata["text"] = text
             return ""
 
+        return ""
+
+    def _prebind_cross_app_window(self, step: PlanStep) -> str:
+        """Pin the exact application window a text step will act on (read-only).
+
+        Delegates to the desktop capability's own pre-bind (the same adapter
+        resolution and binding path the executing skill uses), so the identity
+        pinned here is exactly what execution re-verifies immediately before
+        typing. Returns a refusal message when the target is stale, foreign,
+        ambiguous, or absent; "" when pinned — or when no pre-bind seam is
+        wired, in which case execution reports its own binding result.
+        """
+        handlers = getattr(self.executor, "handlers", None)
+        if not isinstance(handlers, Mapping):
+            return ""
+        candidates = (step.intent.strip().lower(), *sorted(_CROSS_APP_TEXT_INTENTS))
+        handler = None
+        for intent in candidates:
+            candidate = handlers.get(intent)
+            if candidate is not None and callable(
+                getattr(candidate, "prebind_text_target", None)
+            ):
+                handler = candidate
+                break
+        if handler is None:
+            return ""
+        try:
+            pinned, error = handler.prebind_text_target(dict(step.metadata))
+        except Exception as exc:  # pragma: no cover - defensive: never break the step
+            return f"the application target could not be bound safely: {exc}"
+        if error:
+            return error
+        for key in (
+            "hwnd",
+            "target_pid",
+            "target_title",
+            "target_class",
+            "target_process",
+            "app_id",
+            "app",
+        ):
+            if pinned.get(key) is not None:
+                step.metadata[key] = pinned[key]
         return ""
 
     def _carry_cross_app_binding(self, step: PlanStep, context: ExecutionContext) -> None:
@@ -1859,10 +1948,18 @@ class Brain:
         names an application, only a binding recorded for that application is
         carried. This is a no-op when nothing was bound in this execution.
         """
+        # Ownership is never taken from the plan: any value the plan claims is
+        # discarded here and recomputed below from trusted execution evidence.
+        step.metadata.pop("target_owned", None)
+
         intent = step.intent.strip().lower()
         if intent not in _CROSS_APP_CARRY_INTENTS:
             return
         if step.metadata.get("hwnd") is not None:
+            # A window is already pinned on this step (carried earlier, pinned
+            # by pre-binding, or named by the plan). Recompute ownership for it
+            # so the value always reflects launch evidence from this execution.
+            self._set_target_ownership(step, context)
             return
 
         pinned: set[str] = set()
@@ -1900,6 +1997,36 @@ class Brain:
             app_name = str(meta.get("app") or "").strip()
             if app_name:
                 step.metadata.setdefault("app", app_name)
+            self._set_target_ownership(step, context)
+            return
+
+    def _set_target_ownership(self, step: PlanStep, context: ExecutionContext) -> None:
+        """Record whether this execution's own evidence shows Mamba created the window.
+
+        Ownership is positive evidence only: a successful launch observation
+        from this execution (``launched`` is set by the desktop driver's own
+        launch, never by the plan) whose window handle and owning process match
+        the identity pinned on this step. Without that evidence the window is
+        treated as the user's own — a consequential action on it requires the
+        user's confirmation instead of proceeding silently.
+        """
+        try:
+            hwnd = int(step.metadata.get("hwnd"))
+            target_pid = int(step.metadata.get("target_pid"))
+        except (TypeError, ValueError):
+            return
+        for observation in context.observations:
+            if not observation.success:
+                continue
+            meta = observation.metadata
+            if not meta.get("launched"):
+                continue
+            try:
+                if int(meta.get("hwnd")) != hwnd or int(meta.get("target_pid")) != target_pid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            step.metadata["target_owned"] = True
             return
 
     # ── application resolution (delegates to the desktop capability) ──
@@ -2110,8 +2237,79 @@ class Brain:
             # plan cannot authorize its own action.
             if step.id not in self._approved_step_ids:
                 return False, perm_res.reason or f"Action '{step.description}' requires user confirmation", True
+            if _approval_signature(step) not in self._approved_signatures:
+                # The step this execution is about is not the action+target the
+                # user approved (it changed since, e.g. after replanning).
+                # Approval never transfers to a materially changed step.
+                return False, perm_res.reason or f"Action '{step.description}' requires user confirmation", True
 
         return True, "", False
+
+    @staticmethod
+    def _approval_target_metadata(step: PlanStep) -> dict[str, Any]:
+        """The bound target an approval refers to, when the step pins one."""
+        metadata: dict[str, Any] = {}
+        for key in ("hwnd", "target_pid", "app", "app_id", "path", "command"):
+            value = step.metadata.get(key)
+            if value is not None:
+                metadata[key] = value
+        return metadata
+
+    def _awaiting_approval_result(
+        self, context: ExecutionContext, reason: str,
+    ) -> ExecutionResult:
+        """Record and return the standard pause-for-confirmation result.
+
+        The observation carries the reason, the paused step, and the exact
+        bound target the approval refers to, so the confirmation the user
+        gives is tied to the identity that will actually execute.
+        """
+        pending = self._pending_approval
+        prompt_msg = f"Action requires user confirmation: {reason}. Do you want to proceed?"
+        obs = Observation(
+            step_id=pending.step.id if pending else "approval",
+            content=prompt_msg,
+            success=False,
+            metadata={
+                "permission_decision": "ask",
+                "awaiting_approval": True,
+                "reason": reason,
+                **(self._approval_target_metadata(pending.step) if pending else {}),
+            },
+        )
+        context.add_observation(obs)
+        context.mark_failed(prompt_msg)
+        return context.record.to_result(output=prompt_msg)
+
+    def _expired_approval_result(self, pending: PendingApproval) -> ExecutionResult:
+        """Report that a stale approval elapsed and was discarded.
+
+        Nothing executes: the paused action is revoked and the user is asked
+        to re-initiate it if they still want it.
+        """
+        context = ExecutionContext.from_request(
+            UserRequest(
+                goal=pending.user_request.goal,
+                metadata=dict(pending.user_request.metadata),
+            )
+        )
+        context.transition_to(ExecutionState.PLANNING)
+        msg = (
+            f"Approval for '{pending.step.description}' expired and was "
+            "discarded. Please ask me to do it again."
+        )
+        plan = ExecutionPlan(steps=(PlanStep(description="Report expired approval", intent="respond"),))
+        context.attach_plan(plan)
+        context.transition_to(ExecutionState.EXECUTING)
+        obs = Observation(
+            step_id=plan.steps[0].id,
+            content=msg,
+            success=True,
+            metadata={"approval_expired": True, "step": pending.step.description},
+        )
+        context.add_observation(obs)
+        context.transition_to(ExecutionState.COMPLETED)
+        return context.record.to_result(output=msg)
 
     def _resume_pending_approval(
         self,
@@ -2121,9 +2319,17 @@ class Brain:
         on_progress: Any = None,
     ) -> ExecutionResult:
         """Resume execution of a paused step after user approval."""
-        # Record the approval against this exact step. Approval does not carry
-        # over to the plan's other steps: each still needs its own confirmation.
+        if time.monotonic() - pending.created_at >= _APPROVAL_TTL_SECONDS:
+            # The confirmation window elapsed before the user responded. A
+            # stale approval is discarded and must never execute.
+            self.revoke_pending_approval()
+            return self._expired_approval_result(pending)
+
+        # Record the approval against this exact action + bound target.
+        # Approval does not carry over to the plan's other steps: each still
+        # needs its own confirmation.
         self._approved_step_ids.add(pending.step.id)
+        self._approved_signatures.add(pending.signature)
         context = ExecutionContext.from_request(
             UserRequest(
                 goal=pending.user_request.goal,
@@ -2144,6 +2350,22 @@ class Brain:
 
         try:
             outcome, info = self._execute_step(context, pending.step, on_progress=on_progress)
+            if outcome == _StepOutcome.AWAITING_APPROVAL:
+                # The step materially changed since the user was asked (its
+                # action or bound target no longer matches what was approved).
+                # The earlier approval is void: re-ask for the exact current
+                # identity instead of executing a different action.
+                self._clear_approvals()
+                self._pending_approval = PendingApproval(
+                    step=pending.step,
+                    context=context,
+                    plan=pending.plan,
+                    step_index=pending.step_index,
+                    user_request=pending.user_request,
+                    reason=info,
+                    signature=_approval_signature(pending.step),
+                )
+                return self._awaiting_approval_result(context, info)
             if outcome == _StepOutcome.FAILED:
                 return context.record.to_result()
 
@@ -2158,17 +2380,9 @@ class Brain:
                         step_index=pending.plan.steps.index(rem_step),
                         user_request=pending.user_request,
                         reason=rem_info,
+                        signature=_approval_signature(rem_step),
                     )
-                    prompt_msg = f"Action requires user confirmation: {rem_info}. Do you want to proceed?"
-                    obs = Observation(
-                        step_id=rem_step.id,
-                        content=prompt_msg,
-                        success=False,
-                        metadata={"permission_decision": "ask", "awaiting_approval": True},
-                    )
-                    context.add_observation(obs)
-                    context.mark_failed(prompt_msg)
-                    return context.record.to_result(output=prompt_msg)
+                    return self._awaiting_approval_result(context, rem_info)
                 if outcome == _StepOutcome.FAILED:
                     return context.record.to_result()
 

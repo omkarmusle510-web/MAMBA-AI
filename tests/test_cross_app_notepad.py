@@ -324,19 +324,31 @@ def test_type_step_pins_text_and_expected_predicate():
     )
     brain = _notepad_brain(driver, step)
 
-    result = brain.run("type bound text in notepad")
+    # The pre-existing window is not Mamba-owned, so the typing step pauses for
+    # confirmation before anything is typed.
+    first = brain.run("type bound text in notepad")
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in first.output
+    assert driver.type_calls == []
+
+    result = brain.run("yes")
 
     assert result.status == ResultStatus.COMPLETED
     assert step.metadata["text"] == "bound text"
     assert step.metadata["app"] == "Notepad"
     assert step.metadata["expected"]["ui_text_contains"]["text"] == "bound text"
+    assert driver.type_calls == [(1001, "bound text")]
 
 
 # ── TEST 3 — wrong target protection ────────────────────────────────────────
 
 
 def test_wrong_target_is_never_typed_into():
-    """With an unrelated app focused, Mamba refuses to type rather than guessing."""
+    """With an unrelated app focused, Mamba refuses to type rather than guessing.
+
+    Even after the user confirms, execution re-validates the pinned target and
+    refuses when focus cannot be reclaimed.
+    """
     driver = FakeNotepadDriver()
     driver.windows.append(
         WindowBinding(
@@ -360,7 +372,12 @@ def test_wrong_target_is_never_typed_into():
         ),
     )
 
-    result = brain.run("Open Notepad and type Hello from Mamba.")
+    first = brain.run("Open Notepad and type Hello from Mamba.")
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in first.output
+    assert driver.type_calls == []
+
+    result = brain.run("yes")
 
     assert result.status == ResultStatus.FAILED
     assert driver.type_calls == []
@@ -484,21 +501,29 @@ def test_permission_policy_evaluates_typing_step():
         permissions=policy,
     )
 
-    result = brain.run("Open Notepad and type Hello from Mamba.")
+    first = brain.run("Open Notepad and type Hello from Mamba.")
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in first.output
 
+    result = brain.run("yes")
     assert result.status == ResultStatus.COMPLETED
-    assert len(policy.requests) == 1
+    assert driver.texts[1001] == "Hello from Mamba"
+
     request = policy.requests[0]
     assert request.action == DesktopAction.TYPE_TEXT_IN_APPLICATION.value
-    assert request.risk_level == RiskLevel.MEDIUM
+    # The window is not Mamba-owned: typing into a pre-existing user window
+    # escalates to HIGH risk and asks. (Mamba-launched targets stay MEDIUM.)
+    assert request.risk_level == RiskLevel.HIGH
     assert request.metadata.get("externally_visible") is True
     # Not destructive and not irreversible: the policy must not treat typing as such.
     assert request.metadata.get("destructive") is not True
     assert request.metadata.get("irreversible") is not True
     assert request.metadata.get("user_sensitive") is not True
-    # MEDIUM risk executes automatically under the existing policy (no second
-    # confirmation mechanism, and nothing auto-authorized as low risk).
-    assert DefaultPermissionPolicy().evaluate(request).decision == PermissionDecision.ALLOW
+    # HIGH risk pauses for confirmation under the existing policy; MEDIUM
+    # executes automatically. The resumed execution re-evaluates the same
+    # request (now approved) instead of trusting the earlier check blindly.
+    assert DefaultPermissionPolicy().evaluate(request).decision == PermissionDecision.ASK
+    assert len(policy.requests) == 2
 
 
 def test_launch_and_read_are_low_risk_metadata():
@@ -603,7 +628,11 @@ def test_verification_is_inconclusive_without_desktop_capability():
         intents=("type_text",),
     )
 
-    result = brain.run("type Hello from Mamba into Notepad")
+    first = brain.run("type Hello from Mamba into Notepad")
+    assert brain._pending_approval is not None
+    assert driver.type_calls == []
+
+    result = brain.run("yes")
 
     assert result.status == ResultStatus.FAILED
     combined = " ".join(o.content for o in result.observations).lower()
@@ -640,7 +669,7 @@ def test_voice_request_uses_same_cross_app_path():
 
 
 def test_voice_type_request_is_not_refused():
-    """Voice-originated typing is allowed (only high-risk approvals are voice-restricted)."""
+    """Voice requests flow through the same path; voice *approvals* stay refused."""
     driver = FakeNotepadDriver()
     driver.windows.append(
         WindowBinding(
@@ -662,14 +691,29 @@ def test_voice_type_request_is_not_refused():
     )
     runtime = MambaRuntime(brain=brain)
 
-    result = runtime.run(
+    # A voice request is processed normally — it pauses only because the
+    # pre-existing window is unowned (a provenance escalation, not a refusal).
+    first = runtime.run(
         UserRequest(
             goal="type Hello from Mamba in notepad",
             metadata={"input_modality": "voice"},
         )
     )
+    assert "Voice approval is not permitted" not in first.output
+    assert brain._pending_approval is not None
+    assert driver.type_calls == []
 
-    assert result.status == ResultStatus.COMPLETED
+    # A voice "yes" cannot approve the escalation; the approval stays pending.
+    refusal = runtime.run(
+        UserRequest(goal="yes", metadata={"input_modality": "voice"})
+    )
+    assert "Voice approval is not permitted" in refusal.output
+    assert brain._pending_approval is not None
+    assert driver.type_calls == []
+
+    # An on-screen confirmation resolves the same pending approval.
+    final = runtime.run(UserRequest(goal="yes"))
+    assert final.status == ResultStatus.COMPLETED
     assert driver.texts[1001] == "Hello from Mamba"
 
 
@@ -696,7 +740,20 @@ def test_mixed_executor_routes_notepad_intents_to_desktop_handler():
         )
     )
     assert metadata["action"] == "type_text_in_application"
-    assert metadata["risk_level"] == RiskLevel.MEDIUM
+    # Without established ownership of the target window, typing escalates.
+    assert metadata["risk_level"] == RiskLevel.HIGH
+
+    owned = handlers["type_text"].get_metadata(
+        TaskInput(
+            step_id="s2",
+            description="type into notepad",
+            intent="type_text",
+            execution_id="e1",
+            goal="open notepad and type",
+            step_metadata={"text": "Hello from Mamba", "target_owned": True},
+        )
+    )
+    assert owned["risk_level"] == RiskLevel.MEDIUM
 
 
 def test_read_notepad_text_skill_returns_observation_metadata():
@@ -791,7 +848,13 @@ def test_declared_ui_text_predicate_uses_existing_verifier():
     )
     brain = _notepad_brain(driver, step, intents=("type_text_in_notepad", "read_notepad_text"))
 
-    result = brain.run("type Hello from Mamba in notepad")
+    # The window was not created by a Mamba launch step, so the change is
+    # confirmed first; the declared predicate is verified after approval.
+    first = brain.run("type Hello from Mamba in notepad")
+    assert brain._pending_approval is not None
+    assert driver.type_calls == []
+
+    result = brain.run("yes")
 
     assert result.status == ResultStatus.COMPLETED
     assert driver.texts[1001] == "Hello from Mamba"

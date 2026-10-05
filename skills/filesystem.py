@@ -16,6 +16,7 @@ from tools.filesystem.tool import (
     ListDirectoryTool,
     ReadFileTool,
     WriteFileTool,
+    resolve_secure_path,
 )
 from tools.filesystem.types import FILESYSTEM_OPERATIONS, FilesystemAction
 from tools.protocols import ToolExecutor
@@ -241,13 +242,20 @@ class WriteFileSkill(BaseSkill):
         super().__init__(skill)
         self._tool = tool or WriteFileTool(root_dir=root_dir)
         self._executor = executor or StandardToolExecutor()
+        self._root_dir = Path(root_dir).resolve() if root_dir is not None else None
 
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
-        """Dynamically detect destructive overwrite of existing non-empty file."""
+        """Dynamically detect destructive overwrite of an existing non-empty file.
+
+        The path is resolved against the configured workspace root *before*
+        classification, so the decision is made on the same contained path the
+        write will use — a traversal or symlink escape is never stat'd here,
+        and the write itself is refused downstream by the same resolver.
+        """
         path_str = self._resolve_path_arg(task_input.step_metadata)
         if path_str:
             try:
-                p = Path(path_str)
+                p = resolve_secure_path(path_str, self._root_dir)
                 if p.is_file() and p.stat().st_size > 0:
                     return {
                         "action": "write_file",

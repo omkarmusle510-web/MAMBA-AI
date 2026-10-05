@@ -90,13 +90,19 @@ def adapter_metadata(
                 "target_pid": target.pid,
                 "target_process": target.process_name,
                 "target_class": target.class_name,
+                "launched": bool(target.launched),
             }
         )
     return metadata
 
 
 def _binding_from_metadata(meta: dict[str, Any]) -> WindowBinding | None:
-    """Rebuild a full window binding from step metadata, when one was carried."""
+    """Rebuild a full window binding from step metadata, when one was carried.
+
+    ``launched`` is deliberately NOT read back: provenance can only be minted
+    by the driver's own launch, and step metadata is planner-influenced. The
+    rebuilt binding is re-verified live by the caller before any action.
+    """
     hwnd = meta.get("hwnd")
     pid = meta.get("target_pid")
     if hwnd is None or pid is None:
@@ -215,6 +221,57 @@ def bind_target(
     return None, (
         f"No open {adapter.display_name} window was found. Launch it first, or repeat "
         "the request after it is open."
+    )
+
+
+def prebind_text_window(
+    driver: Any,
+    registry: ApplicationRegistry,
+    meta: dict[str, Any],
+    *,
+    default_app_id: str | None = None,
+    fallback_app_id: str | None = None,
+    socket: Any = None,
+    timeout: float = 6.0,
+) -> tuple[dict[str, Any], str]:
+    """Resolve and pin the exact window a text action will use — read-only.
+
+    Mirrors the consuming skill's own resolution (same adapter lookup, same
+    availability check, same ``bind_target``), so the identity produced here is
+    the identity that will be re-verified immediately before the keystrokes are
+    sent. Nothing is focused, typed, or written; a stale, foreign, ambiguous, or
+    absent target is refused with the same message execution would have produced.
+
+    Returns ``(pinned_metadata, "")`` on success or ``({}, error)`` on refusal.
+    """
+    adapter, reason = resolve_adapter(
+        meta,
+        registry,
+        default_app_id=default_app_id,
+        fallback_app_id=fallback_app_id,
+    )
+    if adapter is None:
+        return {}, reason
+
+    available, unavailable_reason = _availability(driver, socket, adapter.app_id)
+    if not available:
+        return {}, unavailable_reason
+
+    target, problem = bind_target(driver, adapter, meta, timeout=timeout)
+    if target is None:
+        return {}, problem
+
+    return (
+        {
+            "hwnd": target.hwnd,
+            "target_pid": target.pid,
+            "target_title": target.title,
+            "target_class": target.class_name,
+            "target_process": target.process_name,
+            "app_id": adapter.app_id,
+            "app": adapter.display_name,
+        },
+        "",
     )
 
 

@@ -54,6 +54,11 @@ class WindowBinding:
     ``app_id`` names the supported application this window was verified as, when
     one was identified. An empty ``app_id`` means "not yet bound to an
     application" — such a window is never acted on.
+
+    ``launched`` records provenance: True only when Mamba itself launched this
+    window (ownership established at launch time). Windows adopted from the
+    user's pre-existing desktop keep ``launched=False`` and are never treated
+    as Mamba-owned.
     """
 
     hwnd: int
@@ -62,6 +67,7 @@ class WindowBinding:
     pid: int
     process_name: str = ""
     app_id: str = ""
+    launched: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +77,7 @@ class WindowBinding:
             "pid": self.pid,
             "process_name": self.process_name,
             "app_id": self.app_id,
+            "launched": self.launched,
         }
 
     def identified_as(self, app_id: str) -> "WindowBinding":
@@ -82,6 +89,7 @@ class WindowBinding:
             pid=self.pid,
             process_name=self.process_name,
             app_id=app_id,
+            launched=self.launched,
         )
 
 

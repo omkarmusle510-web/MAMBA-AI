@@ -23,6 +23,7 @@ from tools.desktop.cross_app_tools import (
     ReadApplicationTextTool,
     TypeTextInApplicationHandler,
     TypeTextInApplicationTool,
+    prebind_text_window,
 )
 from tools.desktop.driver import BoundApplicationDriver, CrossAppDriver
 from tools.desktop.notepad import (
@@ -782,6 +783,36 @@ class DesktopTaskHandler:
             return True
         return False
 
+    def prebind_text_target(self, meta: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """Pre-bind the exact window a text action will use — before permission.
+
+        Read-only: nothing is focused, typed, or written. Resolves the same
+        adapter and binds through the same driver the executing skill uses, so
+        the identity that is approved is the identity that is re-verified
+        immediately before typing. Returns ``(pinned_metadata, "")`` on success
+        or ``({}, refusal_message)`` — the same message execution would give.
+        A wiring with no reachable tool handler is skipped (execution then
+        reports its own result).
+        """
+        skill = (
+            self.type_text_in_notepad_skill
+            if self._implies_notepad(meta)
+            else self.type_text_in_application_skill
+        )
+        tool_handler = getattr(skill, "tool_handler", None)
+        driver = getattr(tool_handler, "driver", None)
+        registry = getattr(tool_handler, "registry", None)
+        if driver is None or registry is None:
+            return {}, ""
+        return prebind_text_window(
+            driver,
+            registry,
+            meta,
+            default_app_id=getattr(tool_handler, "_default_app_id", None),
+            fallback_app_id=getattr(tool_handler, "_fallback_app_id", None),
+            socket=getattr(tool_handler, "_socket", None),
+        )
+
     def get_metadata(self, task_input: TaskInput) -> dict[str, Any]:
         """Return authoritative capability security metadata for this intent."""
         intent = (
@@ -792,7 +823,24 @@ class DesktopTaskHandler:
 
         cross_app_meta = cross_app_action_for(intent)
         if cross_app_meta is not None:
-            return DESKTOP_OPERATIONS[cross_app_meta].to_metadata()
+            metadata = DESKTOP_OPERATIONS[cross_app_meta].to_metadata()
+            if (
+                cross_app_meta
+                in (
+                    DesktopAction.TYPE_TEXT_IN_APPLICATION,
+                    DesktopAction.TYPE_TEXT_IN_NOTEPAD,
+                )
+                and not task_input.step_metadata.get("target_owned")
+            ):
+                # Typing edits the real content of a window. A window Mamba
+                # launched in this execution (``target_owned``, authored by the
+                # Brain from execution evidence) keeps the normal MEDIUM
+                # classification; anything else needs the user's explicit
+                # confirmation (HIGH -> ASK under the single existing policy).
+                # Not destructive and not irreversible — only the risk level
+                # moves, and only for unowned targets.
+                metadata["risk_level"] = "high"
+            return metadata
 
         if intent in _OPEN_URL_INTENTS:
             return DESKTOP_OPERATIONS[DesktopAction.OPEN_URL].to_metadata()

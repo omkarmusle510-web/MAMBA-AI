@@ -325,8 +325,11 @@ def create_app(
                 if data.get("type") == "video":
                     continue
 
-                # A cancel with no turn in flight is a no-op.
+                # A cancel with no turn in flight is still a revocation: any
+                # paused approval was raised in the cancelled context and must
+                # not remain executable.
                 if data.get("type") == "cancel":
+                    runtime.brain.revoke_pending_approval()
                     continue
 
                 # 2. Incoming text or voice-turn audio.

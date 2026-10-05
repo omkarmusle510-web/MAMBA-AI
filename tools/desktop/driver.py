@@ -314,6 +314,18 @@ class CrossAppDriver:
             if binding.title.lower().startswith("untitled"):
                 chosen = binding
                 break
+        # Record provenance on the returned binding: this exact window was
+        # created by this launch call, so it is Mamba-owned and may be acted on
+        # without separate consent. Windows adopted elsewhere keep launched=False.
+        chosen = WindowBinding(
+            hwnd=chosen.hwnd,
+            title=chosen.title,
+            class_name=chosen.class_name,
+            pid=chosen.pid,
+            process_name=chosen.process_name,
+            app_id=chosen.app_id or adapter.app_id,
+            launched=True,
+        )
         self.wait_until_ready(chosen, timeout=5.0)
         return chosen
 

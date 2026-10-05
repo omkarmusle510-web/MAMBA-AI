@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from agents.planner import AgentPlanner
 from agents.planning_agent import PlanningAgent
@@ -24,6 +25,17 @@ except ImportError:
     pass
 
 _DEFAULT_VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
+
+
+def _workspace_root() -> Path:
+    """The authoritative root filesystem operations are confined to.
+
+    Overridable via ``MAMBA_WORKSPACE_ROOT``; defaults to the directory the
+    runtime was started in. Relative paths resolve inside this root and
+    traversal/symlink escapes are denied by the filesystem and terminal tools.
+    """
+    raw = os.environ.get("MAMBA_WORKSPACE_ROOT", "").strip()
+    return Path(raw).expanduser().resolve() if raw else Path.cwd().resolve()
 
 
 def create_runtime(
@@ -85,7 +97,9 @@ def create_runtime(
     planner = AgentPlanner(handler=planning_agent)
     if memory is None:
         memory = PersistentStore()
-    executor = create_mixed_task_executor(model_router=router, memory_store=memory)
+    executor = create_mixed_task_executor(
+        model_router=router, memory_store=memory, root_dir=_workspace_root()
+    )
 
     brain = Brain(
         planner=planner,

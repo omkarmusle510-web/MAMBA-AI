@@ -384,7 +384,23 @@ def test_generic_intents_are_wired_and_classified():
         )
     )
     assert metadata["action"] == DesktopAction.TYPE_TEXT_IN_APPLICATION.value
-    assert metadata["risk_level"] == RiskLevel.MEDIUM
+    # A window Mamba did not launch is the user's own state: typing into it is
+    # escalated to HIGH (-> ASK) but stays non-destructive.
+    assert metadata["risk_level"] == RiskLevel.HIGH
+    assert metadata["destructive"] is False
+
+    owned = handlers["type_text"].get_metadata(
+        TaskInput(
+            step_id="s",
+            description="type",
+            intent="type_text",
+            execution_id="e",
+            goal="g",
+            step_metadata={"app": "notepad", "text": "hi", "target_owned": True},
+        )
+    )
+    # A window this execution launched keeps the normal classification.
+    assert owned["risk_level"] == RiskLevel.MEDIUM
 
 
 def test_generic_launch_and_type_flow_for_a_second_application():
@@ -516,8 +532,15 @@ def test_wrong_target_is_never_typed_into_when_focus_cannot_be_reclaimed():
         registry=registry,
     )
 
-    result = brain.run("type hello into Notes")
+    # A pre-existing user window is not Mamba-owned: the action pauses for the
+    # user's confirmation before anything is typed.
+    awaiting = brain.run("type hello into Notes")
+    assert driver.type_calls == []
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in awaiting.output
 
+    # Even after consent, focus cannot be reclaimed, so nothing is typed.
+    result = brain.run("yes")
     assert result.status == ResultStatus.FAILED
     assert driver.type_calls == []
     assert notes_window.hwnd not in [hwnd for _, hwnd, _ in driver.type_calls]
@@ -647,7 +670,11 @@ def test_application_registry_is_extensible_without_core_changes():
     )
     window = driver.open_window("notes", "Notes", process="Notes.exe", cls="NotesWindow")
     driver.foreground_hwnd = window.hwnd
-    result = brain.run("type extensible into Notes")
+    awaiting = brain.run("type extensible into Notes")
+    # The pre-existing window is not Mamba-owned: consent is requested first.
+    assert brain._pending_approval is not None
+    assert "Action requires user confirmation" in awaiting.output
+    result = brain.run("yes")
     assert result.status == ResultStatus.COMPLETED, result.error or result.output
     assert driver.texts[window.hwnd] == "extensible"
 

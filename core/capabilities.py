@@ -206,13 +206,19 @@ class CapabilityRegistry:
 
 def default_capability_registry(
     *,
-    email_configured: bool = True,
-    calendar_configured: bool = True,
-    messaging_configured: bool = True,
+    email_configured: bool = False,
+    calendar_configured: bool = False,
+    messaging_configured: bool = False,
     web_configured: bool | None = None,
     github_configured: bool | None = None,
 ) -> CapabilityRegistry:
-    """Create a CapabilityRegistry populated with all standard Mamba capabilities."""
+    """Create a CapabilityRegistry populated with all standard Mamba capabilities.
+
+    Email, calendar, and messaging default to NOT_CONFIGURED: their bundled
+    providers are simulated, so advertising them as available would misstate
+    what the planner can actually execute. Pass ``*_configured=True`` only when
+    a real provider is wired (or deliberately in tests/dev).
+    """
     if web_configured is None:
         web_configured = bool(os.environ.get("TAVILY_API_KEY", "").strip())
     if github_configured is None:
@@ -258,7 +264,7 @@ def default_capability_registry(
             supported_actions=(
                 "open_url",
                 "open_application",
-                "close_application",
+                "close_window",
                 "focus_window",
                 "get_foreground_window",
                 "get_window_title",
@@ -330,7 +336,7 @@ def default_capability_registry(
             capability_id="system",
             name="System Information",
             description="Inspect system hardware, OS, CPU, memory, and GPU.",
-            supported_actions=("system_info", "gpu_info", "platform_info", "memory_info"),
+            supported_actions=("system_info", "gpu_info"),
             limitations=("Read-only diagnostic reporting",),
             status=CapabilityStatus.AVAILABLE,
             provider="local",
@@ -370,8 +376,8 @@ def default_capability_registry(
             description="Inspect repositories, issues, PRs, and perform Git operations.",
             supported_actions=(
                 "get_repository",
-                "read_file",
-                "list_directory",
+                "github_read_file",
+                "github_list_directory",
                 "get_issue",
                 "list_issues",
                 "get_pull_request",

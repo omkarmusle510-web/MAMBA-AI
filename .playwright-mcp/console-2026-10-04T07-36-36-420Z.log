@@ -1,0 +1,3 @@
+[    1764ms] [INFO] LegacyDataMixin will be applied to all legacy elements.
+Set `_legacyUndefinedCheck: true` on element class to enable. @ https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.QoIJCn4IPpA.es5.O/am=AAAAIAAAEICU/d=1/br=1/rs=AGKMywHMFm7XvOdvHO3cTSu7TMRFeF-V4Q/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk:13080
+[    3893ms] [WARNING] The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127 @ :0

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.brain import Brain
+from core.capabilities import default_capability_registry
 from core.context import ExecutionContext
 from core.types import ExecutionPlan, PlanStep, ResultStatus, UserRequest
 from permissions.policy import DefaultPermissionPolicy
@@ -27,6 +28,20 @@ from tools.messaging.errors import ConversationNotFoundError
 from tools.messaging.providers import MessagingProvider, SimulatedMessagingProvider
 from tools.messaging.types import MessagingAction
 from verification.verifier import DefaultVerifier
+
+
+def _comm_registry(*, email: bool = False, calendar: bool = False, messaging: bool = False):
+    """Capability registry with simulated providers explicitly opted in.
+
+    Production defaults refuse unconfigured providers (capability
+    truthfulness); these tests wire the simulated providers directly, so the
+    opt-in mirror of that contract is declared here.
+    """
+    return default_capability_registry(
+        email_configured=email,
+        calendar_configured=calendar,
+        messaging_configured=messaging,
+    )
 
 
 # =====================================================================
@@ -49,7 +64,7 @@ def test_email_search_and_read_automatic_execution():
         PlanStep(description="search nvidia email", intent="search_emails", metadata={"query": "NVIDIA"}),
         PlanStep(description="read nvidia email", intent="read_email", metadata={"email_id": "em-101"}),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(email=True))
 
     res = brain.run("Find the email from NVIDIA and read it")
     assert res.status == ResultStatus.COMPLETED
@@ -71,7 +86,7 @@ def test_email_draft_is_automatic():
             metadata={"to": "events@nvidia.com", "subject": "Re: Invitation", "body": "I will attend."},
         ),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(email=True))
 
     res = brain.run("Draft a reply saying I'll attend")
     assert res.status == ResultStatus.COMPLETED
@@ -95,7 +110,7 @@ def test_email_send_requires_approval_and_verifies_receipt():
             metadata={"to": "events@nvidia.com", "subject": "Attending", "body": "Confirmed."},
         ),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(email=True))
 
     # Turn 1: Should pause for approval
     res1 = brain.run("Send the email to events@nvidia.com")
@@ -123,7 +138,7 @@ def test_calendar_list_and_search_automatic_execution():
     plan = ExecutionPlan(steps=(
         PlanStep(description="search sync meeting", intent="search_events", metadata={"query": "Rahul"}),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(calendar=True))
 
     res = brain.run("When is my meeting with Rahul?")
     assert res.status == ResultStatus.COMPLETED
@@ -157,7 +172,7 @@ def test_calendar_create_and_modify_require_approval():
             metadata={"title": "Coffee Sync", "start_time": "2026-09-15T11:00:00", "end_time": "2026-09-15T11:30:00"},
         ),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(calendar=True))
 
     # Turn 1: Pauses for approval
     res1 = brain.run("Schedule a coffee sync on Sept 15 at 11 AM")
@@ -181,7 +196,7 @@ def test_calendar_cancel_event_destructive_requires_approval():
     plan = ExecutionPlan(steps=(
         PlanStep(description="cancel rahul meeting", intent="cancel_event", metadata={"event_id": "cal-201"}),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(calendar=True))
 
     res1 = brain.run("Cancel that meeting")
     assert brain._pending_approval is not None
@@ -205,7 +220,7 @@ def test_messaging_read_and_search_automatic():
     plan = ExecutionPlan(steps=(
         PlanStep(description="read rahul chat", intent="read_messages", metadata={"conversation_id": "conv-301"}),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(messaging=True))
 
     res = brain.run("Read messages from Rahul")
     assert res.status == ResultStatus.COMPLETED
@@ -229,7 +244,7 @@ def test_messaging_send_requires_approval_and_verifies_receipt():
             metadata={"recipient": "Rahul", "content": "I'll be 10 minutes late."},
         ),
     ))
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor, capabilities=_comm_registry(messaging=True))
 
     # Turn 1: Pauses for approval
     res1 = brain.run("Message Rahul that I'll be 10 minutes late")
@@ -268,7 +283,7 @@ def test_referent_resolution_across_turns_for_email_calendar_messaging():
             return p
 
     executor = create_mixed_task_executor()
-    brain = Brain(planner=ReferentPlanner(), executor=executor)
+    brain = Brain(planner=ReferentPlanner(), executor=executor, capabilities=_comm_registry(email=True))
 
     # Turn 1: Search email
     res1 = brain.run("Find the email from NVIDIA")
@@ -337,7 +352,11 @@ def test_cross_capability_chaining_email_calendar_messaging():
 
     plan = ExecutionPlan(steps=(step1, step2, step3))
     executor = create_mixed_task_executor()
-    brain = Brain(planner=MagicMock(plan=lambda ctx: plan), executor=executor)
+    brain = Brain(
+        planner=MagicMock(plan=lambda ctx: plan),
+        executor=executor,
+        capabilities=_comm_registry(email=True, calendar=True, messaging=True),
+    )
 
     # Turn 1: Step 1 and Step 2 execute automatically, Step 3 pauses for confirmation
     res1 = brain.run("Find the email about tomorrow's meeting, check when the meeting is, and message Rahul that I'll attend.")
