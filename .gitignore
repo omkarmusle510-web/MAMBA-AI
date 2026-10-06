@@ -43,4 +43,5 @@ dist/
 
 # Wake-word PCM diagnostics (MAMBA_WAKE_CAPTURE=1)
 wake-captures/
-
+# Mamba local runtime/user data
+.mamba/
