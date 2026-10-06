@@ -28,6 +28,11 @@ const SUPPORTED_PHRASE = "hey mamba";
 const SAMPLE_RATE = 16000;
 const PUMP_CHUNK = 4096; // ~256 ms at 16 kHz
 const TRIGGER_DEBOUNCE_MS = 4000;
+// A live analog mic never yields exact-zero PCM for long. ~10.2 s of exact
+// zeros means the device went dead (seen with Bluetooth headsets after
+// sleep); re-acquire instead of listening to a mute stream forever.
+const ZERO_RUN_CHUNKS = 40;
+const REACQUIRE_COOLDOWN_MS = 60000;
 
 export class SherpaOnnxWakeEngine implements WakeEngine {
   private phrase = SUPPORTED_PHRASE;
@@ -45,6 +50,9 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
   private audioCtx: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
+  private zeroRun = 0;
+  private lastReacquire = 0;
+  private reacquiring = false;
 
   isSupported(): boolean {
     if (typeof window === "undefined") return false;
@@ -139,9 +147,14 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.sensitivity = Math.max(0, Math.min(100, value));
   }
 
-  /** sensitivity 0..100 -> KWS threshold 0.35 (strict) .. 0.10 (loose). */
+  /**
+   * sensitivity 0..100 -> KWS threshold 0.09 (strict) .. 0.005 (loose).
+   * Calibrated on real-mic captures: the default sensitivity 60 -> 0.03,
+   * which detects the real user's "hey mamba" (scores 0.04-0.06) while
+   * non-phrase speech stays < 0.001.
+   */
   private threshold(): number {
-    return 0.35 - (this.sensitivity / 100) * 0.25;
+    return Math.max(0.005, 0.09 - this.sensitivity * 0.001);
   }
 
   private async startMic(): Promise<void> {
@@ -181,9 +194,22 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
     this.processorNode.connect(mute);
     mute.connect(audioCtx.destination);
 
+    this.zeroRun = 0;
     this.processorNode.onaudioprocess = (e) => {
       if (!this.intended) return;
       const data = e.inputBuffer.getChannelData(0);
+      let nonzero = false;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] !== 0) {
+          nonzero = true;
+          break;
+        }
+      }
+      if (nonzero) {
+        this.zeroRun = 0;
+      } else if (++this.zeroRun >= ZERO_RUN_CHUNKS) {
+        this.maybeReacquireMic();
+      }
       // Stream PCM to the main-process spotter (fire-and-forget IPC).
       try {
         window.mambaDesktop?.wakeKwsAudioChunk?.(new Float32Array(data));
@@ -192,6 +218,63 @@ export class SherpaOnnxWakeEngine implements WakeEngine {
       }
     };
     wakeDiag(`sherpa engine: microphone acquired, streaming to main process`);
+  }
+
+  private maybeReacquireMic(): void {
+    const now = Date.now();
+    if (this.reacquiring || !this.intended) return;
+    if (now - this.lastReacquire < REACQUIRE_COOLDOWN_MS) return;
+    this.reacquiring = true;
+    this.lastReacquire = now;
+    this.zeroRun = 0;
+    void this.reacquireMic();
+  }
+
+  /** Swap in a fresh MediaStream after a dead-stream (digital silence)
+   *  stretch; the AudioContext and the KWS pipeline stay untouched. */
+  private async reacquireMic(): Promise<void> {
+    const ctx = this.audioCtx;
+    wakeDiag(`sherpa engine: ~10s of exact-zero PCM from mic, re-acquiring`);
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+          sampleRate: SAMPLE_RATE,
+        },
+      });
+      if (!this.intended || this.audioCtx !== ctx || !this.processorNode) {
+        fresh.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch {}
+        });
+        return;
+      }
+      const old = this.micStream;
+      if (this.sourceNode) {
+        try {
+          this.sourceNode.disconnect();
+        } catch {}
+      }
+      if (old) {
+        old.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch {}
+        });
+      }
+      this.micStream = fresh;
+      this.sourceNode = ctx!.createMediaStreamSource(fresh);
+      this.sourceNode.connect(this.processorNode);
+      wakeDiag(`sherpa engine: microphone re-acquired`);
+    } catch (err: any) {
+      wakeDiag(`sherpa engine: microphone re-acquire failed: ${err?.message || err}`);
+    } finally {
+      this.reacquiring = false;
+    }
   }
 
   /** A detection arrived from the main-process spotter. */

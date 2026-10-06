@@ -19,6 +19,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const capture = require("./wakeCapture.cjs");
 
 const SAMPLE_RATE = 16000;
 
@@ -66,7 +67,7 @@ async function init(opts = {}) {
   }
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const threshold = typeof opts.threshold === "number" ? opts.threshold : 0.25;
+    const threshold = typeof opts.threshold === "number" ? opts.threshold : 0.03;
     console.log("[WakeKWS] init: loading sherpa-onnx WASM in main process ...");
     const t0 = Date.now();
     const glue = require("./sherpa/sherpa-onnx-wasm-nodejs.cjs");
@@ -105,6 +106,7 @@ async function init(opts = {}) {
 
 /** (Re)create the spotter. Model files stay on disk; Module stays loaded. */
 function loadKws(threshold, keywordsScore) {
+  capture.end();
   if (stream) {
     try {
       stream.free();
@@ -120,7 +122,11 @@ function loadKws(threshold, keywordsScore) {
   const dir = kwsDir();
   const keywords = fs.readFileSync(path.join(dir, "keywords.txt"), "utf8");
   const t1 = Date.now();
-  const score = typeof keywordsScore === "number" ? keywordsScore : 1.5;
+  // Calibrated on real-mic captures (see wake-captures notes): the phrase
+  // "hey mamba" spoken by the real user scores 0.04-0.08 with boost 5.0,
+  // while non-phrase speech stays <0.001. Boost 5.0 is the measured window
+  // that aligns real utterances without breaking synthetic ones.
+  const score = typeof keywordsScore === "number" ? keywordsScore : 5.0;
   kws = kwsApi.createKws(Module, {
     featConfig: { samplingRate: SAMPLE_RATE, featureDim: 80 },
     modelConfig: {
@@ -144,6 +150,7 @@ function loadKws(threshold, keywordsScore) {
   });
   activeThreshold = threshold;
   stream = kws.createStream();
+  capture.begin({ threshold, score });
   console.log(`[WakeKWS] KWS READY in ${Date.now() - t1}ms (threshold=${threshold}, score=${score})`);
 }
 
@@ -163,6 +170,7 @@ function acceptAudio(input) {
     }
   }
   if (!samples || samples.length === 0) return null;
+  capture.feed(samples);
   try {
     stream.acceptWaveform(SAMPLE_RATE, samples);
     let detectedKw = null;
@@ -199,6 +207,7 @@ function acceptAudio(input) {
 
 /** Release the decode stream (mic-side already stopped by the renderer). */
 function stop() {
+  capture.end();
   if (stream) {
     try {
       stream.free();

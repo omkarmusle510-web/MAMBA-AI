@@ -67,20 +67,29 @@ class FrontendManager {
     if (isDev) {
       console.log("[FrontendManager] Spawning Vite dev server for desktop dev mode...");
       const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-      this.viteProcess = spawn(npxCmd, ["vite", "--port", this.vitePort.toString()], {
-        cwd: this.rootDir,
-        env: { ...process.env },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      try {
+        this.viteProcess = spawn(npxCmd, ["vite", "--port", this.vitePort.toString()], {
+          cwd: this.rootDir,
+          env: { ...process.env },
+          stdio: ["ignore", "pipe", "pipe"],
+          // .cmd shims require a shell on Windows (Node >= 20 spawn EINVAL).
+          shell: process.platform === "win32",
+        });
+      } catch (err) {
+        console.warn(`[FrontendManager] Vite spawn failed (${(err && err.message) || err}). Falling back to built static assets.`);
+        this.viteProcess = null;
+      }
 
-      this.viteProcess.stdout.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) console.log(`[Vite] ${text}`);
-      });
-      this.viteProcess.stderr.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) console.error(`[Vite Error] ${text}`);
-      });
+      if (this.viteProcess) {
+        this.viteProcess.stdout.on("data", (data) => {
+          const text = data.toString().trim();
+          if (text) console.log(`[Vite] ${text}`);
+        });
+        this.viteProcess.stderr.on("data", (data) => {
+          const text = data.toString().trim();
+          if (text) console.error(`[Vite Error] ${text}`);
+        });
+      }
 
       // Poll until ready
       const start = Date.now();
